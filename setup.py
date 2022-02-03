@@ -16,7 +16,7 @@ with open('README.md') as readme_file:
 
 requirements = [
     "numpy>=1.17",
-    "brainio @ git+https://github.com/brain-score/brainio",
+    "brainio @ git+https://github.com/BonnerLab/brainio",
     "scikit-learn<0.24",  # 0.24 breaks pls regression
     "scipy",
     "h5py",
@@ -26,7 +26,7 @@ requirements = [
     "networkx",
     "matplotlib",
     "tensorflow",
-    "result_caching @ git+https://github.com/brain-score/result_caching",
+    "result_caching @ git+https://github.com/BonnerLab/result_caching",
     "fire",
     "jupyter",
     "pybtex",
@@ -42,7 +42,7 @@ setup(
     long_description=readme,
     author="Brain-Score Team",
     author_email='mschrimpf@mit.edu, jjpr@mit.edu',
-    url='https://github.com/brain-score/brain-score',
+    url='https://github.com/BonnerLab/brain-score',
     packages=find_packages(exclude=['tests']),
     include_package_data=True,
     install_requires=requirements,
