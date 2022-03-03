@@ -16,7 +16,6 @@ with open('README.md') as readme_file:
 
 requirements = [
     "numpy>=1.17",
-    "brainio @ git+https://github.com/BonnerLab/brainio",
     "scikit-learn<0.24",  # 0.24 breaks pls regression
     "scipy",
     "h5py",
@@ -26,13 +25,17 @@ requirements = [
     "networkx",
     "matplotlib",
     "tensorflow",
-    "result_caching @ git+https://github.com/BonnerLab/result_caching",
     "fire",
     "jupyter",
     "pybtex",
     "peewee",
     "pillow<9.0.0",
     "psycopg2-binary"
+]
+
+requirements_git = [
+    "https://github.com/BonnerLab/brainio#egg=main",
+    "https://github.com/BonnerLab/result_caching#egg=master",
 ]
 
 setup(
@@ -46,6 +49,7 @@ setup(
     packages=find_packages(exclude=['tests']),
     include_package_data=True,
     install_requires=requirements,
+    dependency_links=requirements_git,
     license="MIT license",
     zip_safe=False,
     keywords='brain-score',
