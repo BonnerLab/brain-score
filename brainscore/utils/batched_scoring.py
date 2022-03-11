@@ -46,7 +46,7 @@ class CorrelationScoringBatched(ScoringBatched):
         self._n_prior = None
 
     def update(self, preds: np.ndarray, target: np.ndarray) -> None:
-        self._initialize_like(preds)
+        self._initialize_from(preds)
         preds, target = torch.from_numpy(preds).to(self._device), torch.from_numpy(target).to(self._device)
         n_obs = len(preds)
         mx_new = (self._n_prior * self._mean_x + preds.mean(dim=0) * n_obs) / (self._n_prior + n_obs)
@@ -74,7 +74,7 @@ class CorrelationScoringBatched(ScoringBatched):
         self._corr_xy = None
         self._n_prior = None
 
-    def _initialize_like(self, array: np.ndarray):
+    def _initialize_from(self, array: np.ndarray):
         if self._mean_x is None:
             self._mean_x = torch.zeros(array.shape[1]).to(self._device)
             self._mean_y = torch.zeros(array.shape[1]).to(self._device)
