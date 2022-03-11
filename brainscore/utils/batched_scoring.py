@@ -33,7 +33,7 @@ class ScoringBatched(ABC):
         pass
 
 
-class CorrelationScoringBatched(ScoringBatched):
+class PearsonrScoringBatched(ScoringBatched):
     # WARNING: this online method only becomes accurate for large sample sizes and large batches
 
     def __init__(self, device=None):

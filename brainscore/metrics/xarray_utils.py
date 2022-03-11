@@ -113,6 +113,7 @@ class XarrayRegressionScoreBatched:
                  regression: RegressionModelBatched,
                  scoring: ScoringBatched,
                  batch_size: int = 2048,
+                 eval_batch_size: int = 2048,
                  max_epochs: int = 100,
                  shuffle=True,
                  expected_dims=Defaults.expected_dims,
@@ -123,6 +124,7 @@ class XarrayRegressionScoreBatched:
         self._regression = regression
         self._scoring = scoring
         self._batch_size = batch_size
+        self._eval_batch_size = eval_batch_size
         self._max_epochs = max_epochs
         self._shuffle = shuffle
         self._expected_dims = expected_dims
@@ -163,19 +165,16 @@ class XarrayRegressionScoreBatched:
         self._epoch_training_loss = np.array(epoch_training_loss)
         self._target_neuroid_values = target[self._neuroid_dim].values
 
-    def score(self, source: NeuroidAssembly, target: NeuroidAssembly,
-              batch_size: Optional[int] = 2048) -> Score:
+    def score(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         self._check_dims(source), self._check_dims(target)
         self._check_stimulus_alignment(source, target)
         self._check_target_alignment(target)
         stimulus_dim = self._expected_dims[0]
-        if batch_size is None:
-            batch_size = self._batch_size
 
         self._scoring.reset()
-        for i in range(0, source.sizes[stimulus_dim], batch_size):
-            source_batch, target_batch = source.isel({stimulus_dim: slice(i, i + batch_size)}), \
-                                         target.isel({stimulus_dim: slice(i, i + batch_size)})
+        for i in range(0, source.sizes[stimulus_dim], self._eval_batch_size):
+            source_batch, target_batch = source.isel({stimulus_dim: slice(i, i + self._eval_batch_size)}), \
+                                         target.isel({stimulus_dim: slice(i, i + self._eval_batch_size)})
             preds = self._regression.predict(source_batch.values)
             self._scoring.update(preds.values, target.values)
 
