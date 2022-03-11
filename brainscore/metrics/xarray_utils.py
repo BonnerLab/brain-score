@@ -1,7 +1,11 @@
+from typing import Optional
+
 import numpy as np
 
 from brainio.assemblies import NeuroidAssembly, array_is_element, walk_coords
 from brainscore.metrics import Score
+from brainscore.utils.batched_regression import RegressionModelBatched
+from brainscore.utils.batched_scoring import ScoringBatched
 
 
 class Defaults:
@@ -96,3 +100,125 @@ class XarrayCorrelation:
                                for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
                        dims=neuroid_dims)
         return result
+
+
+#############################################################################
+##################### Batched regression/correlation ########################
+#############################################################################
+
+
+class XarrayRegressionScoreBatched:
+
+    def __init__(self,
+                 regression: RegressionModelBatched,
+                 scoring: ScoringBatched,
+                 batch_size: int = 256,
+                 max_epochs: int = 100,
+                 shuffle=True,
+                 expected_dims=Defaults.expected_dims,
+                 neuroid_dim=Defaults.neuroid_dim,
+                 stimulus_coord=Defaults.stimulus_coord,
+                 random_seed: Optional[int] = None):
+        # todo: add support for stopping based on a patience parameter tracking the progression of training losses
+        self._regression = regression
+        self._scoring = scoring
+        self._batch_size = batch_size
+        self._max_epochs = max_epochs
+        self._shuffle = shuffle
+        self._expected_dims = expected_dims
+        self._neuroid_dim = neuroid_dim
+        self._stimulus_coord = stimulus_coord
+        self._random_seed = random_seed
+
+        self._fitted = False
+        self._epoch_training_loss = None
+        self._target_neuroid_values = None
+
+    def fit(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
+        self._check_dims(source), self._check_dims(target)
+        self._check_stimulus_alignment(source, target)
+        stimulus_dim = self._expected_dims[0]
+
+        if self._shuffle and self._random_seed is not None:
+            np.random.seed(self._random_seed)
+
+        epoch_training_loss = []
+        indices = np.arange(0, len(source[self._stimulus_coord]))
+        for epoch in range(1, self._max_epochs + 1):
+            if self._shuffle:
+                np.random.shuffle(indices)
+
+            batch_losses = []
+            for i in range(0, len(indices), self._batch_size):
+                batch_indices = indices[i:i + self._batch_size]
+                source_batch, target_batch = source.isel({stimulus_dim: batch_indices}), \
+                                             target.isel({stimulus_dim: batch_indices})
+                batch_loss = self._regression.fit_partial(source_batch.values, target_batch.values)
+                batch_losses.append(batch_loss)
+
+            batch_losses = np.array(batch_losses)
+            epoch_training_loss.append(batch_losses.mean())
+
+        self._fitted = True
+        self._epoch_training_loss = np.array(epoch_training_loss)
+        self._target_neuroid_values = target[self._neuroid_dim].values
+
+    def score(self, source: NeuroidAssembly, target: NeuroidAssembly,
+              batch_size: Optional[int] = None) -> Score:
+        self._check_dims(source), self._check_dims(target)
+        self._check_stimulus_alignment(source, target)
+        self._check_target_alignment(target)
+        stimulus_dim = self._expected_dims[0]
+        if batch_size is None:
+            batch_size = self._batch_size
+
+        self._scoring.reset()
+        for i in range(0, source.sizes[stimulus_dim], batch_size):
+            source_batch, target_batch = source.isel({stimulus_dim: slice(i, i + batch_size)}), \
+                                         target.isel({stimulus_dim: slice(i, i + batch_size)})
+            preds = self._regression.predict(source_batch.values)
+            self._scoring.update(preds.values, target.values)
+
+        scores = self._scoring.compute()
+        scores = Score(scores,
+                       coords={coord: (dims, values)
+                               for coord, dims, values in walk_coords(target) if dims == [self._neuroid_dim]},
+                       dims=[self._neuroid_dim])
+
+        return scores
+
+    @property
+    def regression(self):
+        return self._regression
+
+    @property
+    def epoch_training_loss(self):
+        assert self._fitted
+        return self._epoch_training_loss
+
+    def _check_dims(self, assembly: NeuroidAssembly) -> None:
+        # Don't do any transposes if the assembly isn't aligned to the expected dims,
+        # because lazily-loaded assemblies would be entirely loaded into memory.
+        # Just throw an error instead.
+        assert assembly.dims == self._expected_dims, \
+            f'Expected {self._expected_dims}, but got {assembly.dims}'
+        stimulus_dim = assembly[self._stimulus_coord].dims
+        assert len(stimulus_dim) == 0 and stimulus_dim[0] == self._expected_dims[0], \
+            f'Expected stimulus coord {self._stimulus_coord} to be along ' \
+            f'the first dimension in expected dims {self._expected_dims}, ' \
+            f'but it was along {stimulus_dim}'
+
+    def _check_stimulus_alignment(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
+        # Don't re-order assemblies if they are not aligned along their stimulus_coord,
+        # because lazily-loaded assemblies would be entirely loaded into memory.
+        # Just throw an error instead.
+        assert source.dims == target.dims and \
+               (source[self._stimulus_coord].values == target[self._stimulus_coord].values).all(), \
+            f'Source and target data assemblies do not align along their ' \
+            f'stimulus coordinate: {self._stimulus_coord}'
+
+    def _check_target_alignment(self, target: NeuroidAssembly) -> None:
+        # Make sure the target's neuroid coordinates align with those from training.
+        # Don't re-order them otherwise, because lazily-loaded assemblies would be
+        # entirely loaded in memory. Just throw an error instead.
+        assert (target[self._neuroid_dim].values == self._target_neuroid_values).all()
