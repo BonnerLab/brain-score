@@ -112,7 +112,7 @@ class XarrayRegressionScoreBatched:
     def __init__(self,
                  regression: RegressionModelBatched,
                  scoring: ScoringBatched,
-                 batch_size: int = 256,
+                 batch_size: int = 2048,
                  max_epochs: int = 100,
                  shuffle=True,
                  expected_dims=Defaults.expected_dims,
@@ -164,7 +164,7 @@ class XarrayRegressionScoreBatched:
         self._target_neuroid_values = target[self._neuroid_dim].values
 
     def score(self, source: NeuroidAssembly, target: NeuroidAssembly,
-              batch_size: Optional[int] = None) -> Score:
+              batch_size: Optional[int] = 2048) -> Score:
         self._check_dims(source), self._check_dims(target)
         self._check_stimulus_alignment(source, target)
         self._check_target_alignment(target)

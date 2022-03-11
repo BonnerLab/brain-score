@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
-import numpy.typing as npt
+import numpy as np
 
 
 class RegressionModelBatched(ABC):
 
     @abstractmethod
-    def fit_partial(self, source: npt.ArrayLike, target: npt.ArrayLike) -> float:
+    def fit_partial(self, source: np.ndarray, target: np.ndarray) -> float:
         """
         Partially fit model to a batch of data.
         :param source: Batch of inputs.
@@ -15,7 +15,7 @@ class RegressionModelBatched(ABC):
         pass
 
     @abstractmethod
-    def predict(self, source: npt.ArrayLike) -> npt.ArrayLike:
+    def predict(self, source: np.ndarray) -> np.ndarray:
         """
         Get predictions using the fitted model.
         :param source: A set of inputs (probably a batch, if the dataset is large).
