@@ -68,7 +68,7 @@ class LinearRegressionBatched(RegressionModelBatched):
         assert self._linear is not None
         source = torch.from_numpy(source).to(self._device)
         preds = self._linear(source)
-        return preds.numpy()
+        return preds.cpu().numpy()
 
     def _initialize_from(self, source: np.ndarray, target: np.ndarray):
         if self._linear is None:

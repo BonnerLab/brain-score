@@ -64,7 +64,7 @@ class PearsonrScoringBatched(ScoringBatched):
         var_y = self._var_y / (self._n_prior - 1)
         corr_xy = self._corr_xy / (self._n_prior - 1)
         r = (corr_xy / (var_x * var_y).sqrt()).squeeze()
-        return r.numpy()
+        return r.cpu().numpy()
 
     def reset(self) -> None:
         self._mean_x = None

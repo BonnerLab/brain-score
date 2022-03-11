@@ -176,7 +176,7 @@ class XarrayRegressionScoreBatched:
             source_batch, target_batch = source.isel({stimulus_dim: slice(i, i + self._eval_batch_size)}), \
                                          target.isel({stimulus_dim: slice(i, i + self._eval_batch_size)})
             preds = self._regression.predict(source_batch.values)
-            self._scoring.update(preds.values, target.values)
+            self._scoring.update(preds, target.values)
 
         scores = self._scoring.compute()
         scores = Score(scores,
