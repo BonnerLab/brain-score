@@ -31,7 +31,7 @@ class XarrayRegression:
 
     def fit(self, source, target):
         source, target = self._align(source), self._align(target)
-        source, target = source.sortby(self._stimulus_coord), target.sortby(self._stimulus_coord)
+        source = _align_source_to_target(source, target)
 
         self._regression.fit(source, target)
 
@@ -153,8 +153,8 @@ class XarrayRegressionScoreBatched:
             batch_losses = []
             for i in range(0, len(indices), self._batch_size):
                 batch_indices = indices[i:i + self._batch_size]
-                source_batch, target_batch = source.isel({stimulus_dim: batch_indices}), \
-                                             target.isel({stimulus_dim: batch_indices})
+                target_batch = target.isel({stimulus_dim: batch_indices})
+                source_batch = _align_source_to_target(source, target_batch, self._stimulus_coord)
                 batch_loss = self._regression.fit_partial(source_batch.values, target_batch.values)
                 batch_losses.append(batch_loss)
 
@@ -221,3 +221,34 @@ class XarrayRegressionScoreBatched:
         # Don't re-order them otherwise, because lazily-loaded assemblies would be
         # entirely loaded in memory. Just throw an error instead.
         assert (target[self._neuroid_dim].values == self._target_neuroid_values).all()
+
+
+def _align_source_to_target(
+    source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str
+):
+    """
+    The source assembly (X) could have samples that are not present in the target assembly (Y) 
+    (i.e. rows for which we have no target). The target assembly could also have multiple targets 
+    for a given sample. This function aligns the source assembly such that each row in the target 
+    assembly has a corresponding row in the source assembly.
+    """
+    unique_source = np.unique(source[stimulus_coord])
+    assert len(unique_source) == len(
+        source[stimulus_coord]
+    ), f"Source assembly has duplicate samples along the {stimulus_coord} coordinate"
+    assert np.all(
+        np.isin(target[stimulus_coord], unique_source)
+    ), "Not all targets have corresponding sources"
+
+    return source.sel(
+        {
+            source[stimulus_coord].dims[0]: np.squeeze(
+                np.array(
+                    [
+                        np.nonzero(source[stimulus_coord] == target_sample)
+                        for target_sample in target[stimulus_coord]
+                    ]
+                )
+            )
+        }
+    )
