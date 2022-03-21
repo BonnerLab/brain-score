@@ -32,7 +32,8 @@ class XarrayRegression:
 
     def fit(self, source, target):
         source, target = self._align(source), self._align(target)
-        source = align_source_to_target(source, target, self._stimulus_coord)
+        stimulus_dim = self._expected_dims[0]
+        source = source.isel({stimulus_dim: map_target_to_source(source, target, self._stimulus_coord)})
 
         self._regression.fit(source, target)
 
@@ -139,7 +140,7 @@ class XarrayRegressionScoreBatched:
 
     def fit(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
         self._check_dims(source), self._check_dims(target)
-        target_to_source_idx = self._map_target_to_source(source, target)
+        target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
         stimulus_dim = self._expected_dims[0]
 
         if self._shuffle and self._random_seed is not None:
@@ -171,7 +172,7 @@ class XarrayRegressionScoreBatched:
     def score(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         self._check_dims(source), self._check_dims(target)
         self._check_target_alignment(target)
-        target_to_source_idx = self._map_target_to_source(source, target)
+        target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
         stimulus_dim = self._expected_dims[0]
 
         self._scoring.reset()
@@ -227,33 +228,8 @@ class XarrayRegressionScoreBatched:
         # entirely loaded in memory. Just throw an error instead.
         assert (target[self._neuroid_dim].values == self._target_neuroid_values).all()
 
-    def _map_target_to_source(self, source: NeuroidAssembly, target: NeuroidAssembly) -> np.ndarray:
-        assert len(np.unique(source[self.stimulus_coord])) == len(
-            source[self.stimulus_coord]
-        ), f'Source assembly has duplicate samples along the {self.stimulus_coord} coordinate'
-        assert np.all(
-            np.isin(target[self.stimulus_coord], source[self.stimulus_coord])
-        ), 'Not all targets have corresponding sources'
 
-        index_map = []
-        for target_sample in target[self.stimulus_coord]:
-            source_index = np.where(source[self.stimulus_coord] == target_sample)
-            source_index = source_index[0].item()
-            index_map.append(source_index)
-        index_map = np.array(index_map)
-
-        return index_map
-
-
-def align_source_to_target(
-    source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str
-):
-    """
-    The source assembly (X) could have samples that are not present in the target assembly (Y) 
-    (i.e. rows for which we have no target). The target assembly could also have multiple targets 
-    for a given sample. This function aligns the source assembly such that each row in the target 
-    assembly has a corresponding row in the source assembly.
-    """
+def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str) -> np.ndarray:
     assert len(np.unique(source[stimulus_coord])) == len(
         source[stimulus_coord]
     ), f'Source assembly has duplicate samples along the {stimulus_coord} coordinate'
@@ -261,15 +237,11 @@ def align_source_to_target(
         np.isin(target[stimulus_coord], source[stimulus_coord])
     ), 'Not all targets have corresponding sources'
 
-    return source.isel(
-        {
-            source[stimulus_coord].dims[0]: np.squeeze(
-                np.array(
-                    [
-                        np.nonzero(source[stimulus_coord] == target_sample)
-                        for target_sample in target[stimulus_coord]
-                    ]
-                )
-            )
-        }
-    )
+    index_map = []
+    for target_sample in target[stimulus_coord]:
+        source_index = np.where(source[stimulus_coord] == target_sample)
+        source_index = source_index[0].item()
+        index_map.append(source_index)
+    index_map = np.array(index_map)
+
+    return index_map
