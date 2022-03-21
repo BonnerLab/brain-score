@@ -1,6 +1,7 @@
 from typing import Optional
 
 import numpy as np
+from torch.utils.data import Dataset, DataLoader
 
 from brainio.assemblies import NeuroidAssembly, array_is_element, walk_coords
 from brainscore.metrics import Score
@@ -69,7 +70,7 @@ class XarrayRegression:
 
     def _align(self, assembly):
         assert set(assembly.dims) == set(self._expected_dims), \
-            f"Expected {set(self._expected_dims)}, but got {set(assembly.dims)}"
+            f'Expected {set(self._expected_dims)}, but got {set(assembly.dims)}'
         return assembly.transpose(*self._expected_dims)
 
 
@@ -138,6 +139,7 @@ class XarrayRegressionScoreBatched:
 
     def fit(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
         self._check_dims(source), self._check_dims(target)
+        target_to_source_idx = self._map_target_to_source(source, target)
         stimulus_dim = self._expected_dims[0]
 
         if self._shuffle and self._random_seed is not None:
@@ -148,14 +150,14 @@ class XarrayRegressionScoreBatched:
         for _ in range(self._max_epochs):
             if self._shuffle:
                 np.random.shuffle(indices)
-            target_shuffled = target.isel({stimulus_dim: indices})
-            source_shuffled = align_source_to_target(source, target_shuffled, self._stimulus_coord)
-            self._check_stimulus_alignment(source_shuffled, target_shuffled)
+
             batch_losses = []
             for i in range(0, len(indices), self._batch_size):
-                batch_indices = indices[i:i + self._batch_size]
-                target_batch = target_shuffled.isel({stimulus_dim: batch_indices})
-                source_batch = source_shuffled.isel({stimulus_dim: batch_indices})
+                target_batch_indices = indices[i:i + self._batch_size]
+                source_batch_indices = target_to_source_idx[target_batch_indices]
+                target_batch = target.isel({stimulus_dim: target_batch_indices})
+                source_batch = source.isel({stimulus_dim: source_batch_indices})
+
                 batch_loss = self._regression.fit_partial(source_batch.values, target_batch.values)
                 batch_losses.append(batch_loss)
 
@@ -168,15 +170,16 @@ class XarrayRegressionScoreBatched:
 
     def score(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         self._check_dims(source), self._check_dims(target)
-        source = align_source_to_target(source, target, self._stimulus_coord)
-        self._check_stimulus_alignment(source, target)
         self._check_target_alignment(target)
+        target_to_source_idx = self._map_target_to_source(source, target)
         stimulus_dim = self._expected_dims[0]
 
         self._scoring.reset()
         for i in range(0, source.sizes[stimulus_dim], self._eval_batch_size):
-            source_batch, target_batch = source.isel({stimulus_dim: slice(i, i + self._eval_batch_size)}), \
-                                         target.isel({stimulus_dim: slice(i, i + self._eval_batch_size)})
+            source_batch_indices = target_to_source_idx[i:i + self._eval_batch_size]
+            target_batch = target.isel({stimulus_dim: slice(i, i + self._eval_batch_size)})
+            source_batch = source.isel({stimulus_dim: source_batch_indices})
+
             preds = self._regression.predict(source_batch.values)
             self._scoring.update(preds, target_batch.values)
 
@@ -224,6 +227,23 @@ class XarrayRegressionScoreBatched:
         # entirely loaded in memory. Just throw an error instead.
         assert (target[self._neuroid_dim].values == self._target_neuroid_values).all()
 
+    def _map_target_to_source(self, source: NeuroidAssembly, target: NeuroidAssembly) -> np.ndarray:
+        assert len(np.unique(source[self.stimulus_coord])) == len(
+            source[self.stimulus_coord]
+        ), f'Source assembly has duplicate samples along the {self.stimulus_coord} coordinate'
+        assert np.all(
+            np.isin(target[self.stimulus_coord], source[self.stimulus_coord])
+        ), 'Not all targets have corresponding sources'
+
+        index_map = []
+        for target_sample in target[self.stimulus_coord]:
+            source_index = np.where(source[self.stimulus_coord] == target_sample)
+            source_index = source_index[0].item()
+            index_map.append(source_index)
+        index_map = np.array(index_map)
+
+        return index_map
+
 
 def align_source_to_target(
     source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str
@@ -234,13 +254,12 @@ def align_source_to_target(
     for a given sample. This function aligns the source assembly such that each row in the target 
     assembly has a corresponding row in the source assembly.
     """
-    unique_source = np.unique(source[stimulus_coord])
-    assert len(unique_source) == len(
+    assert len(np.unique(source[stimulus_coord])) == len(
         source[stimulus_coord]
-    ), f"Source assembly has duplicate samples along the {stimulus_coord} coordinate"
+    ), f'Source assembly has duplicate samples along the {stimulus_coord} coordinate'
     assert np.all(
-        np.isin(target[stimulus_coord], unique_source)
-    ), "Not all targets have corresponding sources"
+        np.isin(target[stimulus_coord], source[stimulus_coord])
+    ), 'Not all targets have corresponding sources'
 
     return source.isel(
         {
