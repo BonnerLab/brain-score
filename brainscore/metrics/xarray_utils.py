@@ -132,6 +132,7 @@ class XarrayRegressionScoreBatched:
         self._expected_dims = expected_dims
         self._neuroid_dim = neuroid_dim
         self._stimulus_coord = stimulus_coord
+        self._stimulus_dim = self._expected_dims[0]
         self._random_seed = random_seed
 
         self._fitted = False
@@ -141,7 +142,6 @@ class XarrayRegressionScoreBatched:
     def fit(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
         self._check_dims(source), self._check_dims(target)
         target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
-        stimulus_dim = self._expected_dims[0]
 
         if self._shuffle and self._random_seed is not None:
             np.random.seed(self._random_seed)
@@ -156,8 +156,8 @@ class XarrayRegressionScoreBatched:
             for i in range(0, len(indices), self._batch_size):
                 target_batch_indices = indices[i:i + self._batch_size]
                 source_batch_indices = target_to_source_idx[target_batch_indices]
-                target_batch = target.isel({stimulus_dim: target_batch_indices})
-                source_batch = source.isel({stimulus_dim: source_batch_indices})
+                target_batch = target.isel({self._stimulus_dim: target_batch_indices})
+                source_batch = source.isel({self._stimulus_dim: source_batch_indices})
 
                 batch_loss = self._regression.fit_partial(source_batch.values, target_batch.values)
                 batch_losses.append(batch_loss)
@@ -167,19 +167,32 @@ class XarrayRegressionScoreBatched:
 
         self._fitted = True
         self._epoch_training_loss = np.array(epoch_training_loss)
-        self._target_neuroid_values = target[self._neuroid_dim].values
+        self._target_neuroid_values = target[self._neuroid_dim]
+
+    def predict(self, source: NeuroidAssembly) -> NeuroidAssembly:
+        self._check_dims(source)
+        preds = self._regression.predict(source.values)
+        preds = NeuroidAssembly(preds,
+                                dims=self._expected_dims,
+                                coords={
+                                    **{coord: (dims, values)
+                                       for coord, dims, values in walk_coords(source[self._stimulus_dim])},
+                                    **{coord: (dims, values)
+                                       for coord, dims, values in walk_coords(self._target_neuroid_values)}
+                                })
+        return preds
+
 
     def score(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         self._check_dims(source), self._check_dims(target)
         self._check_target_alignment(target)
         target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
-        stimulus_dim = self._expected_dims[0]
 
         self._scoring.reset()
-        for i in range(0, source.sizes[stimulus_dim], self._eval_batch_size):
+        for i in range(0, source.sizes[self._stimulus_dim], self._eval_batch_size):
             source_batch_indices = target_to_source_idx[i:i + self._eval_batch_size]
-            target_batch = target.isel({stimulus_dim: slice(i, i + self._eval_batch_size)})
-            source_batch = source.isel({stimulus_dim: source_batch_indices})
+            target_batch = target.isel({self._stimulus_dim: slice(i, i + self._eval_batch_size)})
+            source_batch = source.isel({self._stimulus_dim: source_batch_indices})
 
             preds = self._regression.predict(source_batch.values)
             self._scoring.update(preds, target_batch.values)
@@ -187,7 +200,7 @@ class XarrayRegressionScoreBatched:
         scores = self._scoring.compute()
         scores = Score(scores,
                        coords={coord: (dims, values)
-                               for coord, dims, values in walk_coords(target) if dims == [self._neuroid_dim]},
+                               for coord, dims, values in walk_coords(target) if dims == (self._neuroid_dim,)},
                        dims=[self._neuroid_dim])
 
         return scores
@@ -208,7 +221,7 @@ class XarrayRegressionScoreBatched:
         assert assembly.dims == self._expected_dims, \
             f'Expected {self._expected_dims}, but got {assembly.dims}'
         stimulus_dim = assembly[self._stimulus_coord].dims
-        assert len(stimulus_dim) == 0 and stimulus_dim[0] == self._expected_dims[0], \
+        assert len(stimulus_dim) == 1 and stimulus_dim[0] == self._stimulus_dim, \
             f'Expected stimulus coord {self._stimulus_coord} to be along ' \
             f'the first dimension in expected dims {self._expected_dims}, ' \
             f'but it was along {stimulus_dim}'
@@ -226,7 +239,7 @@ class XarrayRegressionScoreBatched:
         # Make sure the target's neuroid coordinates align with those from training.
         # Don't re-order them otherwise, because lazily-loaded assemblies would be
         # entirely loaded in memory. Just throw an error instead.
-        assert (target[self._neuroid_dim].values == self._target_neuroid_values).all()
+        assert (target[self._neuroid_dim].values == self._target_neuroid_values.values).all()
 
 
 def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str) -> np.ndarray:

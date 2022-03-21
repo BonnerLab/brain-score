@@ -47,7 +47,8 @@ class PearsonrScoringBatched(ScoringBatched):
 
     def update(self, preds: np.ndarray, target: np.ndarray) -> None:
         self._initialize_from(preds)
-        preds, target = torch.from_numpy(preds).to(self._device), torch.from_numpy(target).to(self._device)
+        preds, target = torch.from_numpy(preds).float().to(self._device), \
+                        torch.from_numpy(target).float().to(self._device)
         n_obs = len(preds)
         mx_new = (self._n_prior * self._mean_x + preds.sum(dim=0)) / (self._n_prior + n_obs)
         my_new = (self._n_prior * self._mean_y + target.sum(dim=0)) / (self._n_prior + n_obs)

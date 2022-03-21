@@ -42,7 +42,8 @@ class LinearRegressionBatched(RegressionModelBatched):
 
     def fit_partial(self, source: np.ndarray, target: np.ndarray) -> float:
         self._initialize_from(source, target)
-        source, target = torch.from_numpy(source).to(self._device), torch.from_numpy(target).to(self._device)
+        source, target = torch.from_numpy(source).float().to(self._device), \
+                         torch.from_numpy(target).float().to(self._device)
 
         loss = self._loss_func(self._linear(source), target)
 
@@ -66,8 +67,9 @@ class LinearRegressionBatched(RegressionModelBatched):
 
     def predict(self, source: np.ndarray) -> np.ndarray:
         assert self._linear is not None
-        source = torch.from_numpy(source).to(self._device)
-        preds = self._linear(source)
+        source = torch.from_numpy(source).float().to(self._device)
+        with torch.no_grad():
+            preds = self._linear(source)
         return preds.cpu().numpy()
 
     def _initialize_from(self, source: np.ndarray, target: np.ndarray):
