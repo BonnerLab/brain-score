@@ -145,7 +145,7 @@ class CrossRegressedCorrelationBatched:
 
     def apply(self, source_train, target_train, source_test, target_test):
         self.regression_score.fit(source_train, target_train)
-        score = self.regression_score.score(prediction, target_test)
+        score = self.regression_score.score(source_test, target_test)
         return score
 
     def aggregate(self, scores):
@@ -153,6 +153,12 @@ class CrossRegressedCorrelationBatched:
 
 
 def linear_regression_pearsonr_batched(regression_kwargs=None, corr_kwargs=None, xarray_kwargs=None):
+    if regression_kwargs is None:
+        regression_kwargs = {}
+    if corr_kwargs is None:
+        corr_kwargs = {}
+    if xarray_kwargs is None:
+        xarray_kwargs = {}
     regression = LinearRegressionBatched(**regression_kwargs)
     scoring = PearsonrScoringBatched(**corr_kwargs)
     regression_score = XarrayRegressionScoreBatched(regression=regression, scoring=scoring, **xarray_kwargs)

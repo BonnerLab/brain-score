@@ -3,8 +3,8 @@ import pytest
 from brainio.assemblies import NeuroidAssembly
 from pytest import approx
 
-from brainscore.metrics.regression import CrossRegressedCorrelation, pls_regression, linear_regression, \
-    pearsonr_correlation, ridge_regression
+from brainscore.metrics.regression import CrossRegressedCorrelation, CrossRegressedCorrelationBatched, \
+    pls_regression, linear_regression, pearsonr_correlation, ridge_regression, linear_regression_pearsonr_batched
 
 
 class TestCrossRegressedCorrelation:
@@ -34,3 +34,26 @@ class TestRegression:
         prediction = regression.predict(source=assembly)
         assert all(prediction['image_id'] == assembly['image_id'])
         assert all(prediction['neuroid_id'] == assembly['neuroid_id'])
+
+
+class TestCrossRegressedCorrelationBatched:
+    def test(self):
+        assembly = NeuroidAssembly((np.arange(300 * 25) + np.random.standard_normal(300 * 25)).reshape((300, 25)),
+                                   coords={'image_id': ('presentation', np.arange(300)),
+                                           'object_name': ('presentation', ['a', 'b', 'c'] * 100),
+                                           'neuroid_id': ('neuroid', np.arange(25)),
+                                           'region': ('neuroid', ['some_region'] * 25)},
+                                   dims=['presentation', 'neuroid'])
+        metric = CrossRegressedCorrelationBatched(
+            linear_regression_pearsonr_batched(regression_kwargs={'lr': 0.1})
+        )
+        score = metric(source=assembly, target=assembly)
+
+        # Test convergence
+        assert score.sel(aggregation='center') == approx(1, abs=.00001)
+
+        # Test dimensions and shapes
+        assert score.dims == ('aggregation',)
+        assert score.shape == (2,)
+        assert score.raw.dims == ('split', 'neuroid')
+        assert score.raw.shape == (10, 25)
