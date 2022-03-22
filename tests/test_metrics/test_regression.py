@@ -1,4 +1,5 @@
 import numpy as np
+import xarray as xr
 import pytest
 from brainio.assemblies import NeuroidAssembly
 from pytest import approx
@@ -38,16 +39,23 @@ class TestRegression:
 
 class TestCrossRegressedCorrelationBatched:
     def test(self):
-        assembly = NeuroidAssembly((np.arange(300 * 25) + np.random.standard_normal(300 * 25)).reshape((300, 25)),
-                                   coords={'image_id': ('presentation', np.arange(300)),
-                                           'object_name': ('presentation', ['a', 'b', 'c'] * 100),
-                                           'neuroid_id': ('neuroid', np.arange(25)),
-                                           'region': ('neuroid', ['some_region'] * 25)},
-                                   dims=['presentation', 'neuroid'])
+        source = NeuroidAssembly(
+            (np.arange(300 * 25) + np.random.standard_normal(300 * 25)).reshape((300, 25)),
+            coords={'image_id': ('presentation', np.arange(300)),
+                    'object_name': ('presentation', ['a', 'b', 'c'] * 100),
+                    'neuroid_id': ('neuroid', np.arange(25)),
+                    'region': ('neuroid', ['some_region'] * 25)},
+            dims=['presentation', 'neuroid'])
+        target_rep1 = source.copy(deep=True)
+        target_rep1['repetition'] = ('presentation', [0] * source.sizes['presentation'])
+        target_rep2 = source.copy(deep=True)
+        target_rep2['repetition'] = ('presentation', [1] * source.sizes['presentation'])
+        target = xr.concat([target_rep1, target_rep2], dim='presentation')
+
         metric = CrossRegressedCorrelationBatched(
             linear_regression_pearsonr_batched(regression_kwargs={'lr': 0.1})
         )
-        score = metric(source=assembly, target=assembly)
+        score = metric(source=source, target=target)
 
         # Test convergence
         assert score.sel(aggregation='center') == approx(1, abs=.00001)

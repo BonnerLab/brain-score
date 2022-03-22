@@ -229,7 +229,7 @@ def extract_coord(assembly, coord, unique=False):
     assert len(dims) == 1
     extracted_assembly = xr.DataArray(coord_values, coords={coord: coord_values}, dims=[coord])
     extracted_assembly = extracted_assembly.stack(**{dims[0]: (coord,)})
-    return extracted_assembly if not unique else extracted_assembly, indices
+    return extracted_assembly, indices
 
 
 class TestOnlyCrossValidationSingle:
@@ -330,6 +330,51 @@ class CrossValidation(Transformation):
 
     def aggregate(self, score):
         return self._split.aggregate(score)
+
+
+class CrossValidationLazy(CrossValidation):
+    """
+    The original CrossValidation class has operations that would load an entire lazy
+    xarray into memory (the `subset()` function).
+    """
+
+    def __init__(self, *args, split_coord=Split.Defaults.split_coord,
+                 stratification_coord=Split.Defaults.stratification_coord, **kwargs):
+        assert 'unique_split_values' not in kwargs
+        super(CrossValidationLazy, self).__init__(*args, split_coord=split_coord,
+                                                  stratification_coord=stratification_coord, unique_split_values=True,
+                                                  **kwargs)
+
+    def pipe(self, source_assembly, target_assembly):
+        if self._split.do_stratify:
+            assert hasattr(target_assembly, self._stratification_coord)
+            assert hasattr(source_assembly, self._stratification_coord)
+        cross_validation_values, splits = self._split.build_splits(target_assembly)
+
+        split_scores = []
+        split_dim = target_assembly[self._split_coord].dims[0]
+        for split_iterator, (train_indices, _), done \
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+            # Based on the unique values for a split, find all the indices where it appears in the
+            # original target assembly. Convert the unique values to a set for faster search.
+            train_values = cross_validation_values[train_indices]
+            train_values = set(train_values.values)
+            train_indices_nonunique = np.array([True if val in train_values else False
+                                                for val in target_assembly[self._split_coord].values])
+            train_target, test_target = target_assembly.isel({split_dim: train_indices_nonunique}), \
+                                        target_assembly.isel({split_dim: ~train_indices_nonunique})
+
+            # Get the score on the current split. Source assembly will only be indexed according
+            # to train_target during training, and test_target during testing. We don't explicitly need
+            # to make splits of the source here.
+            split_score = yield from self._get_result(source_assembly, train_target, test_target,
+                                                      done=done)
+            split_score = split_score.expand_dims('split')
+            split_score['split'] = [split_iterator]
+            split_scores.append(split_score)
+
+        split_scores = Score.merge(*split_scores)
+        yield split_scores
 
 
 def standard_error_of_the_mean(values, dim):

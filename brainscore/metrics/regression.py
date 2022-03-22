@@ -8,7 +8,7 @@ from sklearn.preprocessing import scale
 
 from brainio.assemblies import walk_coords
 from brainscore.metrics.mask_regression import MaskRegression
-from brainscore.metrics.transformations import CrossValidation
+from brainscore.metrics.transformations import CrossValidation, CrossValidationLazy
 from brainscore.utils.batched_regression import LinearRegressionBatched
 from brainscore.utils.batched_scoring import PearsonrScoringBatched
 from .xarray_utils import XarrayRegression, XarrayCorrelation, XarrayRegressionScoreBatched
@@ -137,15 +137,15 @@ class CrossRegressedCorrelationBatched:
         crossvalidation_defaults = dict(train_size=.9, test_size=None)
         crossvalidation_kwargs = {**crossvalidation_defaults, **(crossvalidation_kwargs or {})}
 
-        self.cross_validation = CrossValidation(**crossvalidation_kwargs)
+        self.cross_validation = CrossValidationLazy(**crossvalidation_kwargs)
         self.regression_score = regression_score
 
     def __call__(self, source, target):
         return self.cross_validation(source, target, apply=self.apply, aggregate=self.aggregate)
 
-    def apply(self, source_train, target_train, source_test, target_test):
-        self.regression_score.fit(source_train, target_train)
-        score = self.regression_score.score(source_test, target_test)
+    def apply(self, source, target_train, target_test):
+        self.regression_score.fit(source, target_train)
+        score = self.regression_score.score(source, target_test)
         return score
 
     def aggregate(self, scores):

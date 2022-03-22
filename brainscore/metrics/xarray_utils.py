@@ -246,15 +246,13 @@ def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimu
     assert len(np.unique(source[stimulus_coord])) == len(
         source[stimulus_coord]
     ), f'Source assembly has duplicate samples along the {stimulus_coord} coordinate'
-    assert np.all(
-        np.isin(target[stimulus_coord], source[stimulus_coord])
-    ), 'Not all targets have corresponding sources'
 
-    index_map = []
-    for target_sample in target[stimulus_coord]:
-        source_index = np.where(source[stimulus_coord] == target_sample)
-        source_index = source_index[0].item()
-        index_map.append(source_index)
-    index_map = np.array(index_map)
+    source_val_to_index = {val: idx for idx, val in enumerate(source[stimulus_coord].values)}
+    try:
+        index_map = np.array([source_val_to_index[target_sample]
+                              for target_sample in target[stimulus_coord].values])
+    except KeyError as e:
+        print('Not all targets have corresponding sources')
+        raise e
 
     return index_map
