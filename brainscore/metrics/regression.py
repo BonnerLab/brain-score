@@ -2,6 +2,8 @@ from typing import Optional, Dict
 
 import scipy.stats
 import numpy as np
+import torch
+import xarray as xr
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import scale
@@ -11,7 +13,7 @@ from brainscore.metrics.mask_regression import MaskRegression
 from brainscore.metrics.transformations import CrossValidation, CrossValidationLazy
 from brainscore.utils.batched_regression import LinearRegressionBatched
 from brainscore.utils.batched_scoring import PearsonrScoringBatched
-from .xarray_utils import XarrayRegression, XarrayCorrelation, XarrayRegressionScoreBatched
+from .xarray_utils import XarrayCorrelationEfficient, XarrayRegression, XarrayCorrelation, XarrayRegressionLazy, XarrayRegressionScoreBatched, Defaults, map_target_to_source
 
 
 class CrossRegressedCorrelation:
@@ -29,6 +31,32 @@ class CrossRegressedCorrelation:
 
     def apply(self, source_train, target_train, source_test, target_test):
         self.regression.fit(source_train, target_train)
+        prediction = self.regression.predict(source_test)
+        score = self.correlation(prediction, target_test)
+        return score
+
+    def aggregate(self, scores):
+        return scores.median(dim='neuroid')
+
+
+class CrossRegressedCorrelationLazy:
+    def __init__(self, regression, correlation, crossvalidation_kwargs=None):
+        regression = regression or pls_regression()
+        crossvalidation_defaults = dict(train_size=.9, test_size=None)
+        crossvalidation_kwargs = {**crossvalidation_defaults, **(crossvalidation_kwargs or {})}
+
+        self.cross_validation = CrossValidationLazy(**crossvalidation_kwargs)
+        self.regression = regression
+        self.correlation = correlation
+
+    def __call__(self, source, target):
+        return self.cross_validation(source, target, apply=self.apply, aggregate=self.aggregate)
+
+    def apply(self, source, target_train, target_test):
+        self.regression.fit(source, target_train)
+        stimulus_dim = Defaults.expected_dims[0]
+        stimulus_coord = Defaults.stimulus_coord
+        source_test = source.isel({stimulus_dim: map_target_to_source(source, target_test, stimulus_coord)})
         prediction = self.regression.predict(source_test)
         score = self.correlation(prediction, target_test)
         return score
@@ -69,6 +97,32 @@ class SingleRegression():
         return Ypred
 
 
+class TorchLinearRegression:
+    def __init__(self, device: torch.device = None):
+        if torch.device is not None:
+            self.device = device
+        else:
+            self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.betas = None
+
+    def fit(self, x, y):
+        x = self._cast_to_torch(x)
+        y = self._cast_to_torch(y)
+        self.betas, _, _, _ = torch.linalg.lstsq(x, y)
+
+    def predict(self, x):
+        if self.betas is None:
+            raise RuntimeError("model has not been fit")
+        else:
+            x = self._cast_to_torch(x)
+            return torch.matmul(x, self.betas).cpu().numpy()
+
+    def _cast_to_torch(self, x):
+        if isinstance(x, xr.DataArray):
+            x = x.values
+        return torch.from_numpy(x).float().to(self.device)
+
+
 def mask_regression():
     regression = MaskRegression()
     regression = XarrayRegression(regression)
@@ -90,6 +144,14 @@ def linear_regression(xarray_kwargs=None):
     regression = XarrayRegression(regression, **xarray_kwargs)
     return regression
 
+
+def linear_regression_efficient(xarray_kwargs=None):
+    regression = TorchLinearRegression()
+    xarray_kwargs = xarray_kwargs or {}
+    regression = XarrayRegressionLazy(regression, **xarray_kwargs)
+    return regression
+
+
 def ridge_regression(xarray_kwargs=None):
     regression = Ridge()
     xarray_kwargs = xarray_kwargs or {}
@@ -100,6 +162,16 @@ def ridge_regression(xarray_kwargs=None):
 def pearsonr_correlation(xarray_kwargs=None):
     xarray_kwargs = xarray_kwargs or {}
     return XarrayCorrelation(scipy.stats.pearsonr, **xarray_kwargs)
+
+
+def pearsonr_correlation_efficient(xarray_kwargs=None, backend="numpy.corrcoef"):
+    xarray_kwargs = xarray_kwargs or {}
+    if backend == "numpy.corrcoef":
+        def _numpy_corrcoef(prediction, target):
+            n_half = target.sizes["neuroid"]
+            return np.diag(np.corrcoef(target.transpose(), prediction.transpose())[:n_half, n_half:])
+        _correlation = _numpy_corrcoef
+    return XarrayCorrelationEfficient(_correlation, **xarray_kwargs)
 
 
 def single_regression(xarray_kwargs=None):

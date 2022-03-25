@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
@@ -32,8 +32,7 @@ class XarrayRegression:
 
     def fit(self, source, target):
         source, target = self._align(source), self._align(target)
-        stimulus_dim = self._expected_dims[0]
-        source = source.isel({stimulus_dim: map_target_to_source(source, target, self._stimulus_coord)})
+        source, target = source.sortby(self._stimulus_coord), target.sortby(self._stimulus_coord)
 
         self._regression.fit(source, target)
 
@@ -75,6 +74,34 @@ class XarrayRegression:
         return assembly.transpose(*self._expected_dims)
 
 
+class XarrayRegressionLazy(XarrayRegression):
+    """
+    Adds alignment-checking, un- and re-packaging, and comparison functionality to a regression.
+    """
+
+    def __init__(self, regression, **kwargs):
+        super().__init__(regression, **kwargs)
+
+    def fit(self, source, target):
+        source, target = self._align(source), self._align(target)
+        stimulus_dim = self._expected_dims[0]
+        source = source.isel({stimulus_dim: map_target_to_source(source, target, self._stimulus_coord)})
+
+        self._regression.fit(source, target)
+
+        self._target_neuroid_values = {}
+        for name, dims, values in walk_coords(target):
+            if self._neuroid_dim in dims:
+                assert array_is_element(dims, self._neuroid_dim)
+                self._target_neuroid_values[name] = values
+
+    def predict(self, source):
+        source = self._align(source)
+        predicted_values = self._regression.predict(source)
+        prediction = self._package_prediction(predicted_values, source=source)
+        return prediction
+
+
 class XarrayCorrelation:
     def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, neuroid_coord=Defaults.neuroid_coord):
         self._correlation = correlation
@@ -97,6 +124,32 @@ class XarrayCorrelation:
             r, p = self._correlation(target_neuroids, prediction_neuroids)
             correlations.append(r)
         # package
+        result = Score(correlations,
+                       coords={coord: (dims, values)
+                               for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
+                       dims=neuroid_dims)
+        return result
+
+
+class XarrayCorrelationEfficient:
+    def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, neuroid_coord=Defaults.neuroid_coord):
+        self._correlation = correlation
+        self._correlation_coord = correlation_coord
+        self._neuroid_coord = neuroid_coord
+
+    def __call__(self, prediction, target):
+        neuroid_dims = target[self._neuroid_coord].dims
+        assert len(neuroid_dims) == 1
+        presentation_dims = target[self._correlation_coord].dims
+        assert len(presentation_dims) == 1
+
+        # align
+        prediction = prediction.sortby([self._correlation_coord, self._neuroid_coord]).transpose(presentation_dims[0], neuroid_dims[0])
+        target = target.sortby([self._correlation_coord, self._neuroid_coord]).transpose(presentation_dims[0], neuroid_dims[0])
+        assert np.array(prediction[self._correlation_coord].values == target[self._correlation_coord].values).all()
+        assert np.array(prediction[self._neuroid_coord].values == target[self._neuroid_coord].values).all()
+
+        correlations = self._correlation(prediction, target)
         result = Score(correlations,
                        coords={coord: (dims, values)
                                for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
