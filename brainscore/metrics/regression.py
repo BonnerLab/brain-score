@@ -9,6 +9,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import scale
 
 from brainio.assemblies import walk_coords
+from brainscore.metrics.correlation import pairwise_corrcoef
 from brainscore.metrics.mask_regression import MaskRegression
 from brainscore.metrics.transformations import CrossValidation, CrossValidationLazy
 from brainscore.utils.batched_regression import LinearRegressionBatched
@@ -164,31 +165,20 @@ def pearsonr_correlation(xarray_kwargs=None):
     return XarrayCorrelation(scipy.stats.pearsonr, **xarray_kwargs)
 
 
-def pearsonr_correlation_efficient(xarray_kwargs=None, backend="torch", device: torch.device = None):
+def pearsonr_correlation_efficient(xarray_kwargs=None, **kwargs):
     xarray_kwargs = xarray_kwargs or {}
-    if backend == "torch":
-        if device is None:
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            device = torch.device(device)
-        def _torch_corrcoef(prediction, target):
-            n_half = target.sizes["neuroid"]
-            return (
-                torch.diag(
-                    torch.corrcoef(
-                        torch.concat(
-                            (
-                                torch.from_numpy(prediction.values.transpose()).to(device),
-                                torch.from_numpy(target.values.transpose()).to(device),
-                            ),
-                            dim=0,
-                        )
-                    )[:n_half, n_half:]
-                )
-                .cpu()
-                .numpy()
+    def corrcoef(prediction, target):
+        return (
+            pairwise_corrcoef(
+                torch.from_numpy(prediction.values.transpose()),
+                torch.from_numpy(target.values.transpose()),
+                return_diagonal=True,
+                **kwargs,
             )
-        _correlation = _torch_corrcoef
-    return XarrayCorrelationEfficient(_correlation, **xarray_kwargs)
+            .cpu()
+            .numpy()
+        )
+    return XarrayCorrelationEfficient(corrcoef, **xarray_kwargs)
 
 
 def single_regression(xarray_kwargs=None):
