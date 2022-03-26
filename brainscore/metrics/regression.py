@@ -164,13 +164,30 @@ def pearsonr_correlation(xarray_kwargs=None):
     return XarrayCorrelation(scipy.stats.pearsonr, **xarray_kwargs)
 
 
-def pearsonr_correlation_efficient(xarray_kwargs=None, backend="numpy.corrcoef"):
+def pearsonr_correlation_efficient(xarray_kwargs=None, backend="torch", device: torch.device = None):
     xarray_kwargs = xarray_kwargs or {}
-    if backend == "numpy.corrcoef":
-        def _numpy_corrcoef(prediction, target):
+    if backend == "torch":
+        if device is None:
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            device = torch.device(device)
+        def _torch_corrcoef(prediction, target):
             n_half = target.sizes["neuroid"]
-            return np.diag(np.corrcoef(target.transpose(), prediction.transpose())[:n_half, n_half:])
-        _correlation = _numpy_corrcoef
+            return (
+                torch.diag(
+                    torch.corrcoef(
+                        torch.concat(
+                            (
+                                torch.from_numpy(prediction.values.transpose()).to(device),
+                                torch.from_numpy(target.values.transpose()).to(device),
+                            ),
+                            dim=0,
+                        )
+                    )[:n_half, n_half:]
+                )
+                .cpu()
+                .numpy()
+            )
+        _correlation = _torch_corrcoef
     return XarrayCorrelationEfficient(_correlation, **xarray_kwargs)
 
 
