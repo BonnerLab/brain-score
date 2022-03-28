@@ -57,12 +57,12 @@ def pairwise_corrcoef(
     if device is not None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         device = torch.device(device)
-    n_features_x, n_features_y = x.shape[1], None
+    n_features_x, n_features_y = x.shape[0], None
     if y is not None:
-        n_features_y = y.shape[1]
+        n_features_y = y.shape[0]
         if return_diagonal:
             assert n_features_x == n_features_y, "diagonal does not exist: x and y have different shapes"
-        x = torch.concat((x, y), dim=1).to(device)
+        x = torch.concat((x, y), dim=0).to(device)
         y = None
     x = torch.corrcoef(x)
     if n_features_y is not None:
