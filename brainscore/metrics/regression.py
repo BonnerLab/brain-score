@@ -78,6 +78,29 @@ class ScaledCrossRegressedCorrelation:
         return self.cross_regressed_correlation(source, target)
 
 
+class RegressionLazy:
+    def __init__(self, regression, correlation, stimulus_dim="presentation", stimulus_coord="image_id"):
+        self.regression = regression
+        self.correlation = correlation
+        self.stimulus_dim = stimulus_dim
+        self.stimulus_coord = stimulus_coord
+
+    def __call__(self, source, target):
+        return self.apply(source, target)
+
+    def apply(self, source, target):
+        self.regression.fit(source, target)
+        source_test = source.isel({self.stimulus_dim: map_target_to_source(source, target, self.stimulus_coord)})
+        prediction = self.regression.predict(source_test)
+        score = self.correlation(prediction, target)
+        aggregated_score = self.aggregate(score)
+        aggregated_score.attrs["raw"] = score
+        return aggregated_score
+
+    def aggregate(self, scores):
+        return scores.median(dim='neuroid')
+
+
 class SingleRegression():
     def __init__(self):
         self.mapping = []
