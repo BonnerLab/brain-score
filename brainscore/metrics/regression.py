@@ -167,7 +167,7 @@ def pearsonr_correlation(xarray_kwargs=None):
 
 def pearsonr_correlation_efficient(xarray_kwargs=None, **kwargs):
     xarray_kwargs = xarray_kwargs or {}
-    def corrcoef(prediction, target):
+    def corrcoef(prediction, target, **kwargs):
         return (
             pairwise_corrcoef(
                 torch.from_numpy(prediction.values.transpose()),
