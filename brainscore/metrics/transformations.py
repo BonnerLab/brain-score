@@ -14,6 +14,7 @@ from tqdm import tqdm
 from brainscore.metrics import Score
 from brainscore.metrics.utils import unique_ordered
 from brainscore.utils import fullname
+from brainscore.metrics.xarray_utils import map_target_to_source
 
 
 def apply_aggregate(aggregate_fnc, values):
@@ -390,10 +391,11 @@ class CrossValidationLazy(CrossValidation):
             train_target, test_target = target_assembly.isel({split_dim: train_indices_nonunique}), \
                                         target_assembly.isel({split_dim: ~train_indices_nonunique})
 
+            test_source = source_assembly.isel({split_dim: map_target_to_source(source_assembly, test_target, split_dim)})
             # Get the score on the current split. Source assembly will only be indexed according
             # to train_target during training, and test_target during testing. We don't explicitly need
             # to make splits of the source here.
-            split_score = yield from self._get_result(source_assembly, train_target, test_target,
+            split_score = yield from self._get_result(source_assembly, train_target, test_source, test_target,
                                                       done=done)
             split_score = split_score.expand_dims('split')
             split_score['split'] = [split_iterator]
