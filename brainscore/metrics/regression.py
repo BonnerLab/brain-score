@@ -1,4 +1,4 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 
 import scipy.stats
 import numpy as np
@@ -8,22 +8,26 @@ from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import scale
 
-from brainio.assemblies import walk_coords
+from brainio.assemblies import walk_coords, NeuroidAssembly
+from brainscore.metrics import Metric, Score
 from brainscore.metrics.correlation import pairwise_corrcoef
 from brainscore.metrics.mask_regression import MaskRegression
 from brainscore.metrics.transformations import CrossValidation, CrossValidationLazy
 from brainscore.utils.batched_regression import LinearRegressionBatched
 from brainscore.utils.batched_scoring import PearsonrScoringBatched
-from .xarray_utils import XarrayCorrelationEfficient, XarrayRegression, XarrayCorrelation, XarrayRegressionLazy, XarrayRegressionScoreBatched, Defaults, map_target_to_source
+from .xarray_utils import XarrayRegression, XarrayCorrelation, XarrayRegressionScoreBatched, map_target_to_source
 
 
 class CrossRegressedCorrelation:
-    def __init__(self, regression, correlation, crossvalidation_kwargs=None):
+    def __init__(self, regression, correlation, lazy=False, crossvalidation_kwargs=None):
         regression = regression or pls_regression()
         crossvalidation_defaults = dict(train_size=.9, test_size=None)
         crossvalidation_kwargs = {**crossvalidation_defaults, **(crossvalidation_kwargs or {})}
 
-        self.cross_validation = CrossValidation(**crossvalidation_kwargs)
+        if lazy:
+            self.cross_validation = CrossValidationLazy(**crossvalidation_kwargs)
+        else:
+            self.cross_validation = CrossValidation(**crossvalidation_kwargs)
         self.regression = regression
         self.correlation = correlation
 
@@ -32,32 +36,6 @@ class CrossRegressedCorrelation:
 
     def apply(self, source_train, target_train, source_test, target_test):
         self.regression.fit(source_train, target_train)
-        prediction = self.regression.predict(source_test)
-        score = self.correlation(prediction, target_test)
-        return score
-
-    def aggregate(self, scores):
-        return scores.median(dim='neuroid')
-
-
-class CrossRegressedCorrelationLazy:
-    def __init__(self, regression, correlation, crossvalidation_kwargs=None):
-        regression = regression or pls_regression()
-        crossvalidation_defaults = dict(train_size=.9, test_size=None)
-        crossvalidation_kwargs = {**crossvalidation_defaults, **(crossvalidation_kwargs or {})}
-
-        self.cross_validation = CrossValidationLazy(**crossvalidation_kwargs)
-        self.regression = regression
-        self.correlation = correlation
-
-    def __call__(self, source, target):
-        return self.cross_validation(source, target, apply=self.apply, aggregate=self.aggregate)
-
-    def apply(self, source, target_train, target_test):
-        self.regression.fit(source, target_train)
-        stimulus_dim = Defaults.expected_dims[0]
-        stimulus_coord = Defaults.stimulus_coord
-        source_test = source.isel({stimulus_dim: map_target_to_source(source, target_test, stimulus_coord)})
         prediction = self.regression.predict(source_test)
         score = self.correlation(prediction, target_test)
         return score
@@ -78,26 +56,51 @@ class ScaledCrossRegressedCorrelation:
         return self.cross_regressed_correlation(source, target)
 
 
-class RegressionLazy:
-    def __init__(self, regression, correlation, stimulus_dim="presentation", stimulus_coord="image_id"):
+class TestSetCorrelation(Metric):
+    # TODO add tests
+    def __init__(
+        self,
+        regression: XarrayRegression,
+        correlation: XarrayCorrelation,
+        stimulus_dim: str = "presentation",
+        stimulus_coord: str = "image_id",
+        train_coord: str = None,
+        test_coord: str = None,
+    ):
         self.regression = regression
         self.correlation = correlation
-        self.stimulus_dim = stimulus_dim
-        self.stimulus_coord = stimulus_coord
+        self._stimulus_dim = stimulus_dim
+        self._stimulus_coord = stimulus_coord
+        self._train_coord = train_coord
+        self._test_coord = test_coord
 
-    def __call__(self, source, target):
-        return self.apply(source, target)
+    def __call__(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
+        source = source.isel({self._stimulus_dim: map_target_to_source(source, target, self._stimulus_dim)})
 
-    def apply(self, source, target):
-        self.regression.fit(source, target)
-        source_test = source.isel({self.stimulus_dim: map_target_to_source(source, target, self.stimulus_coord)})
+        source_train = self._filter_assembly(source, self._train_coord)
+        target_train = self._filter_assembly(target, self._train_coord)
+        self.regression.fit(source_train, target_train)
+
+        source_test = self._filter_assembly(source, self._test_coord)
+        target_test = self._filter_assembly(target, self._test_coord)
         prediction = self.regression.predict(source_test)
-        score = self.correlation(prediction, target)
+
+        score = self.correlation(prediction, target_test)
         aggregated_score = self.aggregate(score)
         aggregated_score.attrs["raw"] = score
         return aggregated_score
 
-    def aggregate(self, scores):
+    def _filter_assembly(self, assembly: NeuroidAssembly, coord: str) -> NeuroidAssembly:
+        if coord is None:
+            return assembly
+        else:
+            return assembly.isel(
+                {
+                    self._stimulus_dim: assembly[coord].astype(bool).values
+                }
+            )
+
+    def aggregate(self, scores: Score) -> Score:
         return scores.median(dim='neuroid')
 
 
@@ -121,9 +124,10 @@ class SingleRegression():
         return Ypred
 
 
-class TorchLinearRegression:
-    def __init__(self, device: torch.device = None):
-        if torch.device is not None:
+class LinearRegressionPytorch:
+    #TODO: match the sklearn LinearRegression API
+    def __init__(self, device: Union[torch.device, str] = None):
+        if device is not None:
             self.device = device
         else:
             self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -162,17 +166,14 @@ def pls_regression(regression_kwargs=None, xarray_kwargs=None):
     return regression
 
 
-def linear_regression(xarray_kwargs=None):
-    regression = LinearRegression()
+def linear_regression(xarray_kwargs=None, backend: str = "sklearn", torch_kwargs=None):
+    if backend == "sklearn":
+        regression = LinearRegression()
+    elif backend == "pytorch":
+        torch_kwargs = torch_kwargs or {}
+        regression = LinearRegressionPytorch(**torch_kwargs)
     xarray_kwargs = xarray_kwargs or {}
     regression = XarrayRegression(regression, **xarray_kwargs)
-    return regression
-
-
-def linear_regression_efficient(xarray_kwargs=None):
-    regression = TorchLinearRegression()
-    xarray_kwargs = xarray_kwargs or {}
-    regression = XarrayRegressionLazy(regression, **xarray_kwargs)
     return regression
 
 
@@ -185,11 +186,6 @@ def ridge_regression(xarray_kwargs=None):
 
 def pearsonr_correlation(xarray_kwargs=None):
     xarray_kwargs = xarray_kwargs or {}
-    return XarrayCorrelation(scipy.stats.pearsonr, **xarray_kwargs)
-
-
-def pearsonr_correlation_efficient(xarray_kwargs=None, **kwargs):
-    xarray_kwargs = xarray_kwargs or {}
     def corrcoef(prediction, target, **kwargs):
         return (
             pairwise_corrcoef(
@@ -201,7 +197,7 @@ def pearsonr_correlation_efficient(xarray_kwargs=None, **kwargs):
             .cpu()
             .numpy()
         )
-    return XarrayCorrelationEfficient(corrcoef, **xarray_kwargs)
+    return XarrayCorrelation(corrcoef, parallel=True, **xarray_kwargs)
 
 
 def single_regression(xarray_kwargs=None):
@@ -245,9 +241,9 @@ class CrossRegressedCorrelationBatched:
     def __call__(self, source, target):
         return self.cross_validation(source, target, apply=self.apply, aggregate=self.aggregate)
 
-    def apply(self, source, target_train, target_test):
-        self.regression_score.fit(source, target_train)
-        score = self.regression_score.score(source, target_test)
+    def apply(self, source_train, target_train, source_test, target_test):
+        self.regression_score.fit(source_train, target_train)
+        score = self.regression_score.score(source_test, target_test)
         return score
 
     def aggregate(self, scores):

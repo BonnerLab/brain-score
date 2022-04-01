@@ -1,7 +1,6 @@
-from typing import Optional, Tuple, Union
+from typing import Callable, Optional
 
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
 
 from brainio.assemblies import NeuroidAssembly, array_is_element, walk_coords
 from brainscore.metrics import Score
@@ -20,11 +19,11 @@ class XarrayRegression:
     """
     Adds alignment-checking, un- and re-packaging, and comparison functionality to a regression.
     """
-
     def __init__(self, regression, expected_dims=Defaults.expected_dims, neuroid_dim=Defaults.neuroid_dim,
                  neuroid_coord=Defaults.neuroid_coord, stimulus_coord=Defaults.stimulus_coord):
         self._regression = regression
         self._expected_dims = expected_dims
+        self._stimulus_dim = self._expected_dims[0]
         self._neuroid_dim = neuroid_dim
         self._neuroid_coord = neuroid_coord
         self._stimulus_coord = stimulus_coord
@@ -32,8 +31,7 @@ class XarrayRegression:
 
     def fit(self, source, target):
         source, target = self._align(source), self._align(target)
-        source, target = source.sortby(self._stimulus_coord), target.sortby(self._stimulus_coord)
-
+        source = source.isel({self._stimulus_dim: map_target_to_source(source, target, self._stimulus_dim)})
         self._regression.fit(source, target)
 
         self._target_neuroid_values = {}
@@ -74,83 +72,55 @@ class XarrayRegression:
         return assembly.transpose(*self._expected_dims)
 
 
-class XarrayRegressionLazy(XarrayRegression):
-    """
-    Adds alignment-checking, un- and re-packaging, and comparison functionality to a regression.
-    """
-
-    def __init__(self, regression, **kwargs):
-        super().__init__(regression, **kwargs)
-
-    def fit(self, source, target):
-        source, target = self._align(source), self._align(target)
-        stimulus_dim = self._expected_dims[0]
-        source = source.isel({stimulus_dim: map_target_to_source(source, target, self._stimulus_coord)})
-
-        self._regression.fit(source, target)
-
-        self._target_neuroid_values = {}
-        for name, dims, values in walk_coords(target):
-            if self._neuroid_dim in dims:
-                assert array_is_element(dims, self._neuroid_dim)
-                self._target_neuroid_values[name] = values
-
-    def predict(self, source):
-        source = self._align(source)
-        predicted_values = self._regression.predict(source)
-        prediction = self._package_prediction(predicted_values, source=source)
-        return prediction
-
-
 class XarrayCorrelation:
-    def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, neuroid_coord=Defaults.neuroid_coord):
+    def __init__(
+        self,
+        correlation: Callable,
+        correlation_coord: str = Defaults.stimulus_coord,
+        neuroid_coord: str = Defaults.neuroid_coord,
+        parallel: bool = False,
+    ):
         self._correlation = correlation
         self._correlation_coord = correlation_coord
         self._neuroid_coord = neuroid_coord
+        self._parallel = parallel
 
-    def __call__(self, prediction, target):
-        # align
-        prediction = prediction.sortby([self._correlation_coord, self._neuroid_coord])
-        target = target.sortby([self._correlation_coord, self._neuroid_coord])
-        assert np.array(prediction[self._correlation_coord].values == target[self._correlation_coord].values).all()
-        assert np.array(prediction[self._neuroid_coord].values == target[self._neuroid_coord].values).all()
-        # compute correlation per neuroid
+    def __call__(self, prediction: NeuroidAssembly, target: NeuroidAssembly) -> Score:
+        """Compute the correlation metric on the prediction and target assemblies"""
+        try:
+            self._check_assemblies(prediction, target)
+        except AssertionError:
+            prediction = prediction.sortby([self._correlation_coord, self._neuroid_coord])
+            target = target.sortby([self._correlation_coord, self._neuroid_coord])
+            self._check_assemblies(prediction, target)
+
         neuroid_dims = target[self._neuroid_coord].dims
-        assert len(neuroid_dims) == 1
-        correlations = []
-        for i, coord_value in enumerate(target[self._neuroid_coord].values):
-            target_neuroids = target.isel(**{neuroid_dims[0]: i})  # `isel` is about 10x faster than `sel`
-            prediction_neuroids = prediction.isel(**{neuroid_dims[0]: i})
-            r, p = self._correlation(target_neuroids, prediction_neuroids)
-            correlations.append(r)
+        if self._parallel:
+            correlations = self._correlation(prediction, target)
+        else:
+            correlations = [
+                self._correlation(  # `isel` is about 10x faster than `sel`
+                    target.isel({neuroid_dims[0]: i_neuroid}),
+                    prediction.isel({neuroid_dims[0]: i_neuroid}),
+                )[0]  # extract only r values, not p
+                for i_neuroid in range(len(target[self._neuroid_coord]))
+            ]
         # package
-        result = Score(correlations,
-                       coords={coord: (dims, values)
-                               for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
-                       dims=neuroid_dims)
-        return result
+        return Score(
+            correlations,
+            coords={
+                coord: (dims, values)
+                for coord, dims, values in walk_coords(target) if dims == neuroid_dims
+            },
+            dims=neuroid_dims,
+        )
 
-
-class XarrayCorrelationEfficient:
-    def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, neuroid_coord=Defaults.neuroid_coord):
-        self._correlation = correlation
-        self._correlation_coord = correlation_coord
-        self._neuroid_coord = neuroid_coord
-
-    def __call__(self, prediction, target):
-        neuroid_dims = target[self._neuroid_coord].dims
-        assert len(neuroid_dims) == 1
-        presentation_dims = target[self._correlation_coord].dims
-        assert len(presentation_dims) == 1
+    def _check_assemblies(self, prediction: NeuroidAssembly, target: NeuroidAssembly) -> None:
+        """Check for alignment of prediction and target assemblies."""
+        assert len(target[self._neuroid_coord].dims) == 1
+        assert len(target[self._correlation_coord].dims) == 1
         assert np.array(prediction[self._correlation_coord].values == target[self._correlation_coord].values).all()
         assert np.array(prediction[self._neuroid_coord].values == target[self._neuroid_coord].values).all()
-
-        correlations = self._correlation(prediction, target)
-        result = Score(correlations,
-                       coords={coord: (dims, values)
-                               for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
-                       dims=neuroid_dims)
-        return result
 
 
 #############################################################################
@@ -190,7 +160,7 @@ class XarrayRegressionScoreBatched:
 
     def fit(self, source: NeuroidAssembly, target: NeuroidAssembly) -> None:
         self._check_dims(source), self._check_dims(target)
-        target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
+        target_to_source_idx = map_target_to_source(source, target, self._stimulus_dim)
 
         if self._shuffle and self._random_seed is not None:
             np.random.seed(self._random_seed)
@@ -235,7 +205,7 @@ class XarrayRegressionScoreBatched:
     def score(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         self._check_dims(source), self._check_dims(target)
         self._check_target_alignment(target)
-        target_to_source_idx = map_target_to_source(source, target, self._stimulus_coord)
+        target_to_source_idx = map_target_to_source(source, target, self._stimulus_dim)
 
         self._scoring.reset()
         for i in range(0, source.sizes[self._stimulus_dim], self._eval_batch_size):
@@ -291,15 +261,21 @@ class XarrayRegressionScoreBatched:
         assert (target[self._neuroid_dim].values == self._target_neuroid_values.values).all()
 
 
-def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_coord: str) -> np.ndarray:
-    assert len(np.unique(source[stimulus_coord])) == len(
-        source[stimulus_coord]
-    ), f'Source assembly has duplicate samples along the {stimulus_coord} coordinate'
+def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_dim: str) -> np.ndarray:
+    """Generate the indices along stimulus_dim in the source assembly that correspond to the same samples in the target assembly."""
 
-    source_val_to_index = {val: idx for idx, val in enumerate(source[stimulus_coord].values)}
+    # if the assemblies are already aligned, don't worry about duplicate samples in source
+    if np.all(source[stimulus_dim].values == target[stimulus_dim].values):
+        return np.arange(source.sizes[stimulus_dim])
+
+    assert len(np.unique(source[stimulus_dim])) == len(
+        source[stimulus_dim]
+    ), f'Source assembly has duplicate samples along the {stimulus_dim} dimension'
+
+    source_val_to_index = {val: idx for idx, val in enumerate(source[stimulus_dim].values)}
     try:
         index_map = np.array([source_val_to_index[target_sample]
-                              for target_sample in target[stimulus_coord].values])
+                              for target_sample in target[stimulus_dim].values])
     except KeyError as e:
         print('Not all targets have corresponding sources')
         raise e
