@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Union
+from typing import Optional, Dict, Union, Tuple
 
 import scipy.stats
 import numpy as np
@@ -18,8 +18,8 @@ from brainscore.utils.batched_scoring import PearsonrScoringBatched
 from .xarray_utils import XarrayRegression, XarrayCorrelation, XarrayRegressionScoreBatched, map_target_to_source
 
 
-class CrossRegressedCorrelation:
-    def __init__(self, regression, correlation, lazy=False, crossvalidation_kwargs=None):
+class CrossRegressedCorrelation(Metric):
+    def __init__(self, regression: XarrayRegression, correlation: XarrayCorrelation, lazy=False, crossvalidation_kwargs=None) -> None:
         regression = regression or pls_regression()
         crossvalidation_defaults = dict(train_size=.9, test_size=None)
         crossvalidation_kwargs = {**crossvalidation_defaults, **(crossvalidation_kwargs or {})}
@@ -31,16 +31,16 @@ class CrossRegressedCorrelation:
         self.regression = regression
         self.correlation = correlation
 
-    def __call__(self, source, target):
+    def __call__(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
         return self.cross_validation(source, target, apply=self.apply, aggregate=self.aggregate)
 
-    def apply(self, source_train, target_train, source_test, target_test):
+    def apply(self, source_train: NeuroidAssembly, target_train: NeuroidAssembly, source_test: NeuroidAssembly, target_test: NeuroidAssembly) -> Score:
         self.regression.fit(source_train, target_train)
         prediction = self.regression.predict(source_test)
         score = self.correlation(prediction, target_test)
         return score
 
-    def aggregate(self, scores):
+    def aggregate(self, scores: Score) -> Score:
         return scores.median(dim='neuroid')
 
 
@@ -64,9 +64,9 @@ class TestSetCorrelation(Metric):
         correlation: XarrayCorrelation,
         stimulus_dim: str = "presentation",
         stimulus_coord: str = "image_id",
-        train_coord: str = None,
+        train_coord: str = "",
         test_coord: str = None,
-    ):
+    ) -> None:
         self.regression = regression
         self.correlation = correlation
         self._stimulus_dim = stimulus_dim
@@ -75,14 +75,12 @@ class TestSetCorrelation(Metric):
         self._test_coord = test_coord
 
     def __call__(self, source: NeuroidAssembly, target: NeuroidAssembly) -> Score:
-        source = source.isel({self._stimulus_dim: map_target_to_source(source, target, self._stimulus_dim)})
+        mask_train, mask_test = self._create_masks(target)
+        target_train = self._filter(target, mask_train)
+        self.regression.fit(source, target_train)
 
-        source_train = self._filter_assembly(source, self._train_coord)
-        target_train = self._filter_assembly(target, self._train_coord)
-        self.regression.fit(source_train, target_train)
-
-        source_test = self._filter_assembly(source, self._test_coord)
-        target_test = self._filter_assembly(target, self._test_coord)
+        target_test = self._filter(target, mask_test)
+        source_test = source.isel({self._stimulus_dim: map_target_to_source(source, target_test, self._stimulus_dim)})
         prediction = self.regression.predict(source_test)
 
         score = self.correlation(prediction, target_test)
@@ -90,25 +88,27 @@ class TestSetCorrelation(Metric):
         aggregated_score.attrs["raw"] = score
         return aggregated_score
 
-    def _filter_assembly(self, assembly: NeuroidAssembly, coord: str) -> NeuroidAssembly:
-        if coord is None:
-            return assembly
+    def _create_masks(self, target: NeuroidAssembly) -> Tuple[np.ndarray, np.ndarray]:
+        mask_train = target[self._train_coord].astype(bool).values
+        if self._test_coord:
+            mask_test = target[self._test_coord].astype(bool).values
+            assert ~np.any(mask_train & mask_test), "train and test data overlap"
         else:
-            return assembly.isel(
-                {
-                    self._stimulus_dim: assembly[coord].astype(bool).values
-                }
-            )
+            mask_test = ~mask_train
+        return mask_train, mask_test
+
+    def _filter(self, x: NeuroidAssembly, mask: np.ndarray) -> NeuroidAssembly:
+        return x.isel({self._stimulus_dim: mask})
 
     def aggregate(self, scores: Score) -> Score:
         return scores.median(dim='neuroid')
 
 
 class SingleRegression():
-    def __init__(self):
+    def __init__(self) -> None:
         self.mapping = []
 
-    def fit(self, X, Y):
+    def fit(self, X: NeuroidAssembly, Y: NeuroidAssembly) -> None:
         X = X.values
         Y = Y.values
         n_stim, n_neuroid = X.shape
@@ -118,7 +118,7 @@ class SingleRegression():
             r[neuron, :] = pearsonr(X, Y[:, neuron:neuron+1])
         self.mapping = np.nanargmax(r, axis=1)
 
-    def predict(self, X):
+    def predict(self, X: NeuroidAssembly) -> np.ndarray:
         X = X.values
         Ypred = X[:, self.mapping]
         return Ypred
@@ -157,7 +157,7 @@ def mask_regression():
     return regression
 
 
-def pls_regression(regression_kwargs=None, xarray_kwargs=None):
+def pls_regression(regression_kwargs=None, xarray_kwargs=None) -> XarrayRegression:
     regression_defaults = dict(n_components=25, scale=False)
     regression_kwargs = {**regression_defaults, **(regression_kwargs or {})}
     regression = PLSRegression(**regression_kwargs)
@@ -166,7 +166,7 @@ def pls_regression(regression_kwargs=None, xarray_kwargs=None):
     return regression
 
 
-def linear_regression(xarray_kwargs=None, backend: str = "sklearn", torch_kwargs=None):
+def linear_regression(xarray_kwargs=None, backend: str = "sklearn", torch_kwargs=None) -> XarrayRegression:
     if backend == "sklearn":
         regression = LinearRegression()
     elif backend == "pytorch":
@@ -177,37 +177,42 @@ def linear_regression(xarray_kwargs=None, backend: str = "sklearn", torch_kwargs
     return regression
 
 
-def ridge_regression(xarray_kwargs=None):
+def ridge_regression(xarray_kwargs=None) -> XarrayRegression:
     regression = Ridge()
     xarray_kwargs = xarray_kwargs or {}
     regression = XarrayRegression(regression, **xarray_kwargs)
     return regression
 
 
-def pearsonr_correlation(xarray_kwargs=None):
+def pearsonr_correlation(xarray_kwargs=None, parallel=True, corrcoef_kwargs=None) -> XarrayCorrelation:
     xarray_kwargs = xarray_kwargs or {}
-    def corrcoef(prediction, target, **kwargs):
-        return (
-            pairwise_corrcoef(
-                torch.from_numpy(prediction.values.transpose()),
-                torch.from_numpy(target.values.transpose()),
-                return_diagonal=True,
-                **kwargs,
+    corrcoef_kwargs = corrcoef_kwargs or {}
+
+    if parallel:
+        def corrcoef(prediction: NeuroidAssembly, target: NeuroidAssembly, **corrcoef_kwargs) -> np.ndarray:
+            return (
+                pairwise_corrcoef(
+                    x=torch.from_numpy(prediction.values.transpose()),
+                    y=torch.from_numpy(target.values.transpose()),
+                    return_diagonal=True,
+                    **corrcoef_kwargs,
+                )
+                .cpu()
+                .numpy()
             )
-            .cpu()
-            .numpy()
-        )
-    return XarrayCorrelation(corrcoef, parallel=True, **xarray_kwargs)
+        return XarrayCorrelation(corrcoef, parallel=True, **xarray_kwargs)
+    else:
+        return XarrayCorrelation(scipy.stats.pearsonr, parallel=False, **xarray_kwargs)
 
 
-def single_regression(xarray_kwargs=None):
+def single_regression(xarray_kwargs=None) -> XarrayRegression:
     regression = SingleRegression()
     xarray_kwargs = xarray_kwargs or {}
     regression = XarrayRegression(regression, **xarray_kwargs)
     return regression
 
 
-def pearsonr(x, y):
+def pearsonr(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     xmean = x.mean(axis=0, keepdims=True)
     ymean = y.mean(axis=0, keepdims=True)
 
@@ -217,7 +222,7 @@ def pearsonr(x, y):
     normxm = scipy.linalg.norm(xm, axis=0, keepdims=True)
     normym = scipy.linalg.norm(ym, axis=0, keepdims=True)
 
-    r = ((xm/normxm)*(ym/normym)).sum(axis=0)
+    r = ((xm / normxm) * (ym / normym)).sum(axis=0)
 
     return r
 

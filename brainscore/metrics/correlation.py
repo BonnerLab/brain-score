@@ -1,3 +1,5 @@
+from typing import Union
+
 import torch
 from scipy.stats import pearsonr
 
@@ -38,7 +40,7 @@ def pairwise_corrcoef(
     x: torch.Tensor,
     y: torch.Tensor = None,
     return_diagonal: bool = True,
-    device: torch.device = None,
+    device: Union[torch.device, str] = None,
     batch_size: int = None,  # TODO implement batching
 ) -> torch.Tensor:
     """Compute the pairwise correlation between columns of tensors x (and y, optionally).
@@ -57,8 +59,10 @@ def pairwise_corrcoef(
     if device is not None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         device = torch.device(device)
+    assert x.dim() == 2, "x must have 2 dimensions"
     n_features_x, n_features_y = x.shape[0], None
     if y is not None:
+        assert y.dim() == 2, "Y must have 2 dimensions"
         n_features_y = y.shape[0]
         if return_diagonal:
             assert n_features_x == n_features_y, "diagonal does not exist: x and y have different shapes"

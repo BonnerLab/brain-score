@@ -134,7 +134,7 @@ class CartesianProduct(Transformation):
         """
         dividers = self.dividers(assembly, dividing_coords=self._dividers)
         scores = []
-        progress = tqdm(enumerate_done(dividers), total=len(dividers), desc='cartesian product')
+        progress = tqdm(enumerate_done(dividers), total=len(dividers), desc='cartesian product', leave=False)
         for i, divider, done in progress:
             progress.set_description(str(divider))
             divided_assembly = assembly.multisel(**divider)
@@ -285,7 +285,7 @@ class CrossValidationSingle(Transformation):
 
         split_scores = []
         for split_iterator, (train_indices, test_indices), done \
-                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
             train_values, test_values = cross_validation_values[train_indices], cross_validation_values[test_indices]
             train = subset(assembly, train_values, dims_must_match=False)
             test = subset(assembly, test_values, dims_must_match=False)
@@ -333,7 +333,7 @@ class CrossValidation(Transformation):
 
         split_scores = []
         for split_iterator, (train_indices, test_indices), done \
-                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
             train_values, test_values = cross_validation_values[train_indices], cross_validation_values[test_indices]
             train_source = subset(source_assembly, train_values, dims_must_match=False)
             train_target = subset(target_assembly, train_values, dims_must_match=False)
@@ -381,7 +381,7 @@ class CrossValidationLazy(CrossValidation):
         split_scores = []
         split_dim = target_assembly[self._split_coord].dims[0]
         for split_iterator, (train_indices, _), done \
-                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
             # Based on the unique values for a split, find all the indices where it appears in the
             # original target assembly. Convert the unique values to a set for faster search.
             train_values = cross_validation_values[train_indices]

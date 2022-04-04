@@ -264,6 +264,15 @@ class XarrayRegressionScoreBatched:
 def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_dim: str) -> np.ndarray:
     """Generate the indices along stimulus_dim in the source assembly that correspond to the same samples in the target assembly."""
 
+    # align the source and target according to all their shared levels along the stimulus_dimension 
+    source = source.reset_index(stimulus_dim)
+    target = target.reset_index(stimulus_dim)
+    unshared_levels = list(set(source[stimulus_dim].coords) ^ set(target[stimulus_dim].coords))
+    shared_levels = list(set(source[stimulus_dim].coords) & set(target[stimulus_dim].coords))
+    source = source.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
+    target = target.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
+    assert source.indexes[stimulus_dim].names == target.indexes[stimulus_dim].names, "source and target don't have levels in the same order along the stimulus dimension"
+
     # if the assemblies are already aligned, don't worry about duplicate samples in source
     if np.all(source[stimulus_dim].values == target[stimulus_dim].values):
         return np.arange(source.sizes[stimulus_dim])
@@ -272,9 +281,10 @@ def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimu
         source[stimulus_dim]
     ), f'Source assembly has duplicate samples along the {stimulus_dim} dimension'
 
-    source_val_to_index = {val: idx for idx, val in enumerate(source[stimulus_dim].values)}
+    # tuples of immutables don't compare equal even when their hashes are equal, for some reason, so explicitly use hash to create dict
+    source_val_to_index = {hash(val): idx for idx, val in enumerate(source.indexes[stimulus_dim].values)}
     try:
-        index_map = np.array([source_val_to_index[target_sample]
+        index_map = np.array([source_val_to_index[hash(target_sample)]
                               for target_sample in target[stimulus_dim].values])
     except KeyError as e:
         print('Not all targets have corresponding sources')
