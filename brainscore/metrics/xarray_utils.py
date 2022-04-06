@@ -264,9 +264,11 @@ class XarrayRegressionScoreBatched:
 def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimulus_dim: str) -> np.ndarray:
     """Generate the indices along stimulus_dim in the source assembly that correspond to the same samples in the target assembly."""
 
-    # align the source and target according to all their shared levels along the stimulus_dimension 
-    source = source.reset_index(stimulus_dim)
-    target = target.reset_index(stimulus_dim)
+    # align the source and target according to all their shared levels along the stimulus_dimension
+    if stimulus_dim in source.indexes:
+        source = source.reset_index(stimulus_dim)
+    if stimulus_dim in target.indexes:
+        target = target.reset_index(stimulus_dim)
     unshared_levels = list(set(source[stimulus_dim].coords) ^ set(target[stimulus_dim].coords))
     shared_levels = list(set(source[stimulus_dim].coords) & set(target[stimulus_dim].coords))
     source = source.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})

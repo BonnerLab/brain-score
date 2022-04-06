@@ -125,30 +125,48 @@ class SingleRegression():
 
 
 class LinearRegressionPytorch:
-    #TODO: match the sklearn LinearRegression API
-    def __init__(self, device: Union[torch.device, str] = None):
-        if device is not None:
-            self.device = device
-        else:
-            self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.betas = None
+    def __init__(
+        self,
+        fit_intercept: bool = True,
+        device: Union[torch.device, str] = None
+    ) -> None:
+        self.fit_intercept = fit_intercept
+        self.device_ = device
+        self.n_features_in_ = None
+        self.coef_ = None
+        self.intercept_ = None
+        self._residues = None
+        self.rank_ = None
+        self.singular_ = None
 
-    def fit(self, x, y):
+    def fit(self, x: xr.DataArray, y: xr.DataArray) -> None:
         x = self._cast_to_torch(x)
-        y = self._cast_to_torch(y)
-        self.betas, _, _, _ = torch.linalg.lstsq(x, y)
+        n_samples_, self.n_features_in_ = x.shape
 
-    def predict(self, x):
-        if self.betas is None:
+        y = self._cast_to_torch(y)
+        if self.fit_intercept:
+            x = torch.cat([x, torch.ones(n_samples_).unsqueeze(1)], dim=1)
+
+        self.coef_, self._residues, self.rank_, self.singular_ = torch.linalg.lstsq(x, y)
+
+        if self.fit_intercept:
+            self.intercept_ = self.coef_[-1, :]
+        else:
+            self.intercept_ = torch.zeros(self.n_features_in_)
+
+        self.coef_ = self.coef_[:-1, :].transpose_(0, 1)
+
+    def predict(self, x: xr.DataArray) -> np.ndarray:
+        if self.coef_ is None:
             raise RuntimeError("model has not been fit")
         else:
             x = self._cast_to_torch(x)
-            return torch.matmul(x, self.betas).cpu().numpy()
+            x = torch.matmul(x, self.coef_.transpose_(0, 1))
+            x += self.intercept_
+            return x.cpu().numpy()
 
-    def _cast_to_torch(self, x):
-        if isinstance(x, xr.DataArray):
-            x = x.values
-        return torch.from_numpy(x).float().to(self.device)
+    def _cast_to_torch(self, x: xr.DataArray) -> torch.Tensor:
+        return torch.from_numpy(x.values).float().to(self.device_)
 
 
 def mask_regression():
