@@ -65,7 +65,7 @@ class TestSetCorrelation(Metric):
         stimulus_dim: str = "presentation",
         stimulus_coord: str = "image_id",
         train_coord: str = "",
-        test_coord: str = None,
+        test_coord: str = "",
     ) -> None:
         self.regression = regression
         self.correlation = correlation
@@ -89,12 +89,20 @@ class TestSetCorrelation(Metric):
         return aggregated_score
 
     def _create_masks(self, target: NeuroidAssembly) -> Tuple[np.ndarray, np.ndarray]:
-        mask_train = target[self._train_coord].astype(bool).values
-        if self._test_coord:
-            mask_test = target[self._test_coord].astype(bool).values
-            assert ~np.any(mask_train & mask_test), "train and test data overlap"
+        if self._train_coord:
+            mask_train = target[self._train_coord].astype(bool).values
+            if self._test_coord:
+                mask_test = target[self._test_coord].astype(bool).values
+                assert ~np.any(mask_train & mask_test), "train and test data overlap"
+            else:
+                mask_test = ~mask_train
         else:
-            mask_test = ~mask_train
+            if self._test_coord:
+                mask_test = target[self._test_coord].astype(bool).values
+                mask_train = ~mask_test
+            else:
+                mask_train = np.full(target.sizes[self._stimulus_dim], True, dtype=bool)
+                mask_test = np.full(target.sizes[self._stimulus_dim], True, dtype=bool)
         return mask_train, mask_test
 
     def _filter(self, x: NeuroidAssembly, mask: np.ndarray) -> NeuroidAssembly:
