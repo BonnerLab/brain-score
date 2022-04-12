@@ -5,6 +5,7 @@ Typically these two sets are model and primate measurements, but metrics are agn
 and can also be used to compare two primate measurements (e.g. for ceiling estimates).
 """
 
+from abc import ABC, abstractmethod
 import warnings
 
 import logging
@@ -12,13 +13,14 @@ import logging
 from brainio.assemblies import DataAssembly, merge_data_arrays
 
 
-class Metric:
+class Metric(ABC):
     """
     Metric interface.
     A metric compares two sets of data and outputs a score of how well they match (1 = identical, 0 = no match).
     """
 
-    def __call__(self, assembly1, assembly2):
+    @abstractmethod
+    def __call__(self, assembly1: DataAssembly, assembly2: DataAssembly):
         """
         Compare two assemblies on their similarity.
         These assemblies are typically neural or behavioral measurements, e.g. model and primate recordings.

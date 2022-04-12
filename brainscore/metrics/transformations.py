@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from typing import List, Tuple
 
 import itertools
 import logging
@@ -7,12 +8,13 @@ import numpy as np
 import xarray as xr
 from brainio.assemblies import DataAssembly, walk_coords
 from brainio.transform import subset
-from sklearn.model_selection import StratifiedShuffleSplit, ShuffleSplit, KFold, StratifiedKFold
+from sklearn.model_selection import StratifiedShuffleSplit, ShuffleSplit, KFold, StratifiedKFold, GroupKFold
 from tqdm import tqdm
 
 from brainscore.metrics import Score
 from brainscore.metrics.utils import unique_ordered
 from brainscore.utils import fullname
+from brainscore.metrics.xarray_utils import map_target_to_source
 
 
 def apply_aggregate(aggregate_fnc, values):
@@ -132,7 +134,7 @@ class CartesianProduct(Transformation):
         """
         dividers = self.dividers(assembly, dividing_coords=self._dividers)
         scores = []
-        progress = tqdm(enumerate_done(dividers), total=len(dividers), desc='cartesian product')
+        progress = tqdm(enumerate_done(dividers), total=len(dividers), desc='cartesian product', leave=False)
         for i, divider, done in progress:
             progress.set_description(str(divider))
             divided_assembly = assembly.multisel(**divider)
@@ -168,17 +170,22 @@ class Split:
         train_size = .9
         split_coord = 'image_id'
         stratification_coord = 'object_name'  # cross-validation across images, balancing objects
+        group_coord = None
         unique_split_values = False
         random_state = 1
 
     def __init__(self,
                  splits=Defaults.splits, train_size=None, test_size=None,
-                 split_coord=Defaults.split_coord, stratification_coord=Defaults.stratification_coord, kfold=False,
+                 split_coord=Defaults.split_coord, stratification_coord=Defaults.stratification_coord,
+                 group_coord=Defaults.group_coord, kfold=False,
                  unique_split_values=Defaults.unique_split_values, random_state=Defaults.random_state):
         super().__init__()
         if train_size is None and test_size is None:
             train_size = self.Defaults.train_size
-        if kfold:
+        self._group_coord = group_coord
+        if self._group_coord is not None:  # predefined splits
+            self._split = GroupKFold(n_splits=splits)
+        elif kfold:
             assert (train_size is None or train_size == self.Defaults.train_size) and test_size is None
             if stratification_coord:
                 self._split = StratifiedKFold(n_splits=splits, shuffle=True, random_state=random_state)
@@ -202,11 +209,20 @@ class Split:
         return bool(self._stratification_coord)
 
     def build_splits(self, assembly):
-        cross_validation_values, indices = extract_coord(assembly, self._split_coord, unique=self._unique_split_values)
-        data_shape = np.zeros(len(cross_validation_values))
-        args = [assembly[self._stratification_coord].values[indices]] if self.do_stratify else []
-        splits = self._split.split(data_shape, *args)
-        return cross_validation_values, list(splits)
+        if self._group_coord is None:
+            cross_validation_values, indices = extract_coord(assembly, self._split_coord, unique=self._unique_split_values)
+            data_shape = np.zeros(len(cross_validation_values))
+            args = [assembly[self._stratification_coord].values[indices]] if self.do_stratify else []
+            splits = self._split.split(data_shape, *args)
+            return cross_validation_values, list(splits)
+        else:  # predefined splits
+            cross_validation_values, _ = extract_coord(
+                assembly, self._split_coord
+            )
+            data_shape = np.zeros(len(cross_validation_values))
+            groups = assembly[self._group_coord].values
+            splits = self._split.split(data_shape, groups=groups)
+            return cross_validation_values, list(splits)
 
     @classmethod
     def aggregate(cls, values):
@@ -229,7 +245,7 @@ def extract_coord(assembly, coord, unique=False):
     assert len(dims) == 1
     extracted_assembly = xr.DataArray(coord_values, coords={coord: coord_values}, dims=[coord])
     extracted_assembly = extracted_assembly.stack(**{dims[0]: (coord,)})
-    return extracted_assembly if not unique else extracted_assembly, indices
+    return extracted_assembly, indices
 
 
 class TestOnlyCrossValidationSingle:
@@ -269,7 +285,7 @@ class CrossValidationSingle(Transformation):
 
         split_scores = []
         for split_iterator, (train_indices, test_indices), done \
-                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
             train_values, test_values = cross_validation_values[train_indices], cross_validation_values[test_indices]
             train = subset(assembly, train_values, dims_must_match=False)
             test = subset(assembly, test_values, dims_must_match=False)
@@ -293,10 +309,17 @@ class CrossValidation(Transformation):
     """
 
     def __init__(self, *args, split_coord=Split.Defaults.split_coord,
-                 stratification_coord=Split.Defaults.stratification_coord, **kwargs):
+                 stratification_coord=Split.Defaults.stratification_coord, 
+                 group_coord=Split.Defaults.group_coord, **kwargs):
         self._split_coord = split_coord
         self._stratification_coord = stratification_coord
-        self._split = Split(*args, split_coord=split_coord, stratification_coord=stratification_coord, **kwargs)
+        self._split = Split(
+            *args,
+            split_coord=split_coord,
+            stratification_coord=stratification_coord,
+            group_coord=group_coord,
+            **kwargs
+        )
         self._logger = logging.getLogger(fullname(self))
 
     def pipe(self, source_assembly, target_assembly):
@@ -310,7 +333,7 @@ class CrossValidation(Transformation):
 
         split_scores = []
         for split_iterator, (train_indices, test_indices), done \
-                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation'):
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
             train_values, test_values = cross_validation_values[train_indices], cross_validation_values[test_indices]
             train_source = subset(source_assembly, train_values, dims_must_match=False)
             train_target = subset(target_assembly, train_values, dims_must_match=False)
@@ -330,6 +353,56 @@ class CrossValidation(Transformation):
 
     def aggregate(self, score):
         return self._split.aggregate(score)
+
+
+class CrossValidationLazy(CrossValidation):
+    """
+    The original CrossValidation class has operations that would load an entire lazy
+    xarray into memory (the `subset()` function).
+    """
+
+    def __init__(self, *args, split_coord=Split.Defaults.split_coord,
+                 stratification_coord=Split.Defaults.stratification_coord,
+                 group_coord=Split.Defaults.group_coord,
+                 **kwargs):
+        assert 'unique_split_values' not in kwargs
+        super(CrossValidationLazy, self).__init__(*args, split_coord=split_coord,
+                                                  stratification_coord=stratification_coord, 
+                                                  group_coord=group_coord,
+                                                  unique_split_values=True,
+                                                  **kwargs)
+
+    def pipe(self, source_assembly, target_assembly):
+        if self._split.do_stratify:
+            assert hasattr(target_assembly, self._stratification_coord)
+            assert hasattr(source_assembly, self._stratification_coord)
+        cross_validation_values, splits = self._split.build_splits(target_assembly)
+
+        split_scores = []
+        split_dim = target_assembly[self._split_coord].dims[0]
+        for split_iterator, (train_indices, _), done \
+                in tqdm(enumerate_done(splits), total=len(splits), desc='cross-validation', leave=False):
+            # Based on the unique values for a split, find all the indices where it appears in the
+            # original target assembly. Convert the unique values to a set for faster search.
+            train_values = cross_validation_values[train_indices]
+            train_values = set(train_values.values)
+            train_indices_nonunique = np.array([True if val in train_values else False
+                                                for val in target_assembly[self._split_coord].values])
+            train_target, test_target = target_assembly.isel({split_dim: train_indices_nonunique}), \
+                                        target_assembly.isel({split_dim: ~train_indices_nonunique})
+
+            test_source = source_assembly.isel({split_dim: map_target_to_source(source_assembly, test_target, split_dim)})
+            # Get the score on the current split. Source assembly will only be indexed according
+            # to train_target during training, and test_target during testing. We don't explicitly need
+            # to make splits of the source here.
+            split_score = yield from self._get_result(source_assembly, train_target, test_source, test_target,
+                                                      done=done)
+            split_score = split_score.expand_dims('split')
+            split_score['split'] = [split_iterator]
+            split_scores.append(split_score)
+
+        split_scores = Score.merge(*split_scores)
+        yield split_scores
 
 
 def standard_error_of_the_mean(values, dim):
