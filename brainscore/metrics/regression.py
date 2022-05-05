@@ -153,7 +153,7 @@ class LinearRegressionPytorch:
 
         y = self._cast_to_torch(y)
         if self.fit_intercept:
-            x = torch.cat([x, torch.ones(n_samples_).unsqueeze(1)], dim=1)
+            x = torch.cat([x, torch.ones(n_samples_, device=self.device_).unsqueeze(1)], dim=1)
 
         self.coef_, self._residues, self.rank_, self.singular_ = torch.linalg.lstsq(x, y)
 
