@@ -271,6 +271,13 @@ def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimu
         target = target.reset_index(stimulus_dim)
     unshared_levels = list(set(source[stimulus_dim].coords) ^ set(target[stimulus_dim].coords))
     shared_levels = list(set(source[stimulus_dim].coords) & set(target[stimulus_dim].coords))
+    # FIXME If there's no `time_bin`` dimension, `time_bin` is automatically treated as a coord along all existing dimensions.
+    # This causes it to be present in `shared_levels` and messes up setting the index because it contains a non-hashable numpy array.
+    # Right now, I'm just dropping it if the data is 2D (no temporal dim) but I have no idea how it'll behave with temporal data.
+    if "time_bin" not in source.dims and "time_bin" in source.coords:
+        source = source.drop_vars("time_bin")
+        target = target.drop_vars("time_bin")
+        shared_levels.remove("time_bin")
     source = source.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
     target = target.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
     assert source.indexes[stimulus_dim].names == target.indexes[stimulus_dim].names, "source and target don't have levels in the same order along the stimulus dimension"
