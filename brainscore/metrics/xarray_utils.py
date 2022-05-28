@@ -276,7 +276,8 @@ def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimu
     # Right now, I'm just dropping it if the data is 2D (no temporal dim) but I have no idea how it'll behave with temporal data.
     if "time_bin" not in source.dims and "time_bin" in source.coords:
         source = source.drop_vars("time_bin")
-        target = target.drop_vars("time_bin")
+        if "time_bin" in target.coords:
+            target = target.drop_vars("time_bin")
         shared_levels.remove("time_bin")
     source = source.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
     target = target.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
