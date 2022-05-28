@@ -278,7 +278,8 @@ def map_target_to_source(source: NeuroidAssembly, target: NeuroidAssembly, stimu
         source = source.drop_vars("time_bin")
         if "time_bin" in target.coords:
             target = target.drop_vars("time_bin")
-        shared_levels.remove("time_bin")
+        if "time_bin" in shared_levels:
+            shared_levels.remove("time_bin")
     source = source.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
     target = target.drop_vars(unshared_levels, errors="ignore").set_index({stimulus_dim: shared_levels})
     assert source.indexes[stimulus_dim].names == target.indexes[stimulus_dim].names, "source and target don't have levels in the same order along the stimulus dimension"
