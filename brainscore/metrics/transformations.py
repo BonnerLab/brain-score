@@ -391,11 +391,12 @@ class CrossValidationLazy(CrossValidation):
             train_target, test_target = target_assembly.isel({split_dim: train_indices_nonunique}), \
                                         target_assembly.isel({split_dim: ~train_indices_nonunique})
 
+            train_source = source_assembly.isel({split_dim: map_target_to_source(source_assembly, train_target, split_dim)})
             test_source = source_assembly.isel({split_dim: map_target_to_source(source_assembly, test_target, split_dim)})
             # Get the score on the current split. Source assembly will only be indexed according
             # to train_target during training, and test_target during testing. We don't explicitly need
             # to make splits of the source here.
-            split_score = yield from self._get_result(source_assembly, train_target, test_source, test_target,
+            split_score = yield from self._get_result(train_source, train_target, test_source, test_target,
                                                       done=done)
             split_score = split_score.expand_dims('split')
             split_score['split'] = [split_iterator]

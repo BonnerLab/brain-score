@@ -153,7 +153,7 @@ class LinearRegressionPytorch:
 
         y = self._cast_to_torch(y)
         if self.fit_intercept:
-            x = torch.cat([x, torch.ones(n_samples_).unsqueeze(1)], dim=1)
+            x = torch.cat([x, torch.ones(n_samples_, device=self.device_).unsqueeze(1)], dim=1)
 
         self.coef_, self._residues, self.rank_, self.singular_ = torch.linalg.lstsq(x, y)
 
@@ -172,6 +172,44 @@ class LinearRegressionPytorch:
             x = torch.matmul(x, self.coef_.transpose_(0, 1))
             x += self.intercept_
             return x.cpu().numpy()
+
+    def _cast_to_torch(self, x: xr.DataArray) -> torch.Tensor:
+        return torch.from_numpy(x.values).float().to(self.device_)
+
+
+class RidgeRegressionPytorch:
+    # adapted from https://gist.github.com/myazdani/3d8a00cf7c9793e9fead1c89c1398f12
+    def __init__(
+        self,
+        regularization: float = 1,
+        fit_intercept: bool = True,
+        device: Union[torch.device, str] = None
+    ):
+        self.regularization = regularization
+        self.fit_intercept = fit_intercept
+        self.device_ = device
+
+    def fit(self, x: xr.DataArray, y: xr.DataArray) -> None:
+        x = self._cast_to_torch(x)
+        y = self._cast_to_torch(y)
+
+        assert x.shape[0] == y.shape[0], "number of X and y rows don't match"
+        if self.fit_intercept:
+            x = torch.cat([torch.ones(x.shape[0], 1, device=self.device_), x], dim=1)
+
+        lhs = x.T @ x
+        rhs = x.T @ y
+        if self.regularization == 0:
+            self.w, _ = torch.lstsq(rhs, lhs)
+        else:
+            ridge = self.regularization * torch.eye(lhs.shape[0], device=self.device)
+            self.w, _ = torch.lstsq(rhs, lhs + ridge)
+
+    def predict(self, x: torch.tensor) -> None:
+        x = self._cast_to_torch(x)
+        if self.fit_intercept:
+            x = torch.cat([torch.ones(x.shape[0], 1, device=self.device_), x], dim=1)
+        return (x @ self.w).cpu().numpy()
 
     def _cast_to_torch(self, x: xr.DataArray) -> torch.Tensor:
         return torch.from_numpy(x.values).float().to(self.device_)
@@ -203,8 +241,14 @@ def linear_regression(xarray_kwargs=None, backend: str = "sklearn", torch_kwargs
     return regression
 
 
-def ridge_regression(xarray_kwargs=None) -> XarrayRegression:
-    regression = Ridge()
+def ridge_regression(xarray_kwargs=None, backend: str = "sklearn", sklearn_kwargs=None, torch_kwargs=None) -> XarrayRegression:
+    # TODO figure out why the code doesn't seem to allow for varying the regularization strength
+    if backend == "sklearn":
+        regression = Ridge(**sklearn_kwargs)
+        print(regression.alpha)
+    elif backend == "pytorch":
+        torch_kwargs = torch_kwargs or {}
+        regression = RidgeRegressionPytorch(**torch_kwargs)
     xarray_kwargs = xarray_kwargs or {}
     regression = XarrayRegression(regression, **xarray_kwargs)
     return regression
