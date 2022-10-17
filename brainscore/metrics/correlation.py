@@ -45,9 +45,9 @@ def pairwise_corrcoef(
 ) -> torch.Tensor:
     """Compute the pairwise correlation between columns of tensors x (and y, optionally).
 
-    :param x: first tensor, shape (n_samples, n_features_x)
+    :param x: first tensor, shape (n_features_x, n_samples)
     :type x: torch.Tensor
-    :param y: first tensor, shape (n_samples, n_features_y), defaults to None
+    :param y: first tensor, shape (n_features_y, n_samples), defaults to None
     :type y: torch.Tensor, optional
     :param return_diagonal: whether to return correlations only for corresponding columns (if y is passed), defaults to True
     :type return_diagonal: bool, optional
