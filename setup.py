@@ -26,7 +26,7 @@ requirements = [
     "networkx",
     "matplotlib",
     "tensorflow",
-    "result_caching @ git+https://github.com/BonnerLab/result_caching",
+    "result_caching @ git+https://github.com/BonnerLab/result-caching",
     "fire",
     "jupyter",
     "pybtex",
